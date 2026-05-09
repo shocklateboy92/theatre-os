@@ -390,8 +390,8 @@ behaviour; the custom pieces are noted.
    In experiment mode, a motd/journal banner advertises the mode.
 
 9. **Kodi starts.** `kodi-standalone-service` (Arch package) launches
-   Kodi as user `kodi` against `/dev/dri/card0` via gbm/EGL/KMS. See
-   Kodi/moonlight section (TODO).
+   Kodi as user `kodi` against `/dev/dri/card0` via gbm/EGL/KMS, on
+   tty1. See "Kodi & moonlight session" below.
 
 ### Custom code summary
 
@@ -399,6 +399,92 @@ Everything custom lives in (a) the initrd (mount + version-pick +
 experiment-snapshot setup) and (b) a handful of `.mount` units shipped
 in the image, plus (c) a small `theatre-os update` wrapper. No
 overlayfs, no exotic machinery; total LoC expected to be small.
+
+## Kodi & moonlight session
+
+Kodi is the shell. moonlight-qt is launched from inside Kodi for game
+streaming and gives the display fully back to Kodi when the user quits
+moonlight. Both run compositor-free (gbm/EGLFS direct to KMS) so
+refresh-rate and HDR switching work, matching LibreELEC's behaviour.
+
+### Display ownership: VT switching
+
+Only one process at a time can hold DRM master on `/dev/dri/card0`,
+which means Kodi-gbm and moonlight-qt cannot share the screen. The
+solution is the standard Linux **virtual terminal switching** dance:
+
+- Kodi runs on **tty1** as a system service (`kodi-standalone-service`,
+  Arch package, runs as user `kodi`). Holds DRM master while the
+  active VT is tty1.
+- moonlight-qt runs on **tty2**, launched on demand. The kernel revokes
+  Kodi's DRM master when the active VT changes; moonlight takes it.
+- When moonlight exits, the launcher switches back to tty1; Kodi
+  re-acquires DRM master and resumes drawing.
+
+This is the same pattern X-on-tty7 used for years; mature, known to
+work. Kodi-gbm v20+ handles DRM master loss/regain gracefully.
+
+### Launcher
+
+A shell script `/usr/bin/theatreos-launch-moonlight` shipped in the
+image:
+
+```
+#!/bin/sh
+trap 'chvt 1' EXIT INT TERM
+chvt 2
+exec moonlight-qt …  # Qt EGLFS env vars set as needed
+```
+
+Triggered from inside Kodi via a Python addon (lives in the
+`ha-config/kodi/` repo, *not* this one — userdata is HA-config scope,
+not OS-image scope). The addon is just `subprocess.Popen` of the
+launcher script.
+
+### Audio
+
+**ALSA-direct for both Kodi and moonlight. No PipeWire, no PulseAudio,
+no audio daemon at all.** This mirrors LibreELEC's setup and is the
+only path that reliably handles bitstream passthrough for **lossless
+formats — Dolby TrueHD, DTS-HD MA, and Atmos delivered as TrueHD+JOC**
+(typical of UHD Blu-ray rips). PipeWire's own current docs (1.6.4,
+mid-2025) still list `truehd-iec61937` and `dtshd-iec61937` as
+"doesn't work yet in practice." Lossy passthrough (DD, DD+, DTS,
+Atmos-as-DD+) does work on PipeWire, but mixing reliable + unreliable
+formats in the same stack is asking for couch debugging.
+
+Configuration:
+- Kodi: `AE_SINK=ALSA`, audio device set to the HDMI sink directly
+  (`hw:CARD=HDMI,DEV=0` or whatever the AVR outputs as).
+- moonlight-qt: also via ALSA (Qt audio backend forced to ALSA, not
+  PulseAudio compat).
+
+ALSA hardware devices don't support concurrent access, so the
+VT-switch handoff covers audio for free: whoever owns the active VT
+holds the HDMI device. Kodi releases it on switch-away, moonlight
+takes it; reverse on switch-back.
+
+Trade-off: no Bluetooth audio output (PipeWire is the modern BT audio
+stack). Acceptable for a couch-AVR HTPC. If we ever wanted BT headphones,
+we'd add PipeWire alongside but Kodi/moonlight would still bypass it.
+
+### Risks to verify on real hardware
+
+- Kodi's behaviour on DRM master loss (should be clean; verify).
+- moonlight-qt EGLFS picking the right tty + DRM card (set
+  `QT_QPA_EGLFS_KMS_CONFIG` JSON if it doesn't auto-detect).
+- moonlight-qt forced to ALSA backend (Qt may default to PulseAudio
+  compat; need to set `QT_MEDIA_BACKEND` or equivalent).
+- HDMI device exclusive-access handoff between Kodi and moonlight
+  across the VT switch.
+- HDR / refresh-rate state restoration when control returns to Kodi
+  (moonlight may have changed the mode mid-stream).
+
+### Out of scope for this repo
+
+The Kodi addons, userdata, and per-user config (skins, libraries,
+remote mappings) live in `ha-config/kodi/` and survive image updates
+via the `/home/kodi/.kodi/` persist mount.
 
 ## Phased plan
 

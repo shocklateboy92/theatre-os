@@ -102,10 +102,10 @@ dock/USB-NIC specific to the ZBook and don't necessarily apply.
 1. SSH into the box. By default `/` is RO — `pacman -S` and `/etc` edits
    fail loudly. This is correct: writes here aren't supposed to be
    ephemerally easy.
-2. To experiment: reboot, edit cmdline at the systemd-boot menu,
-   add `theatreos.experiment=1`. Now `pacman -S` / `/etc` edits work
-   and land in throwaway snapshots.
-3. Reboot back to normal mode → all experimental writes vanish.
+2. `theatre-os experiment` to enter experiment mode live (no reboot;
+   btrfs swap-snapshot trick). Now `pacman -S` / `/etc` edits work
+   and land in throwaway subvols.
+3. `theatre-os experiment-off` (or reboot) → experimental writes vanish.
 4. Promote working changes into `mkosi/` config in this repo.
 5. `mkosi build` → publish image → `theatre-os update` on the box,
    reboot.
@@ -202,7 +202,7 @@ ESP is auto-discovered by systemd-boot via its standard GUID. The data
 partition uses the standard "Linux generic data" GPT type GUID with the
 label `theatreos-data`; the initrd looks it up by label, mounts it,
 then mounts the appropriate `@os/<v>` and `@persist/<v>` subvolumes
-based on the kernel cmdline `theatreos.version=<v>` baked into the UKI.
+based on the version stamped into the UKI's `/usr/lib/os-release`.
 
 (Existing files like `/etc/fstab` aren't used for these mounts — the
 initrd and a small systemd-mount unit handle them, so the same image
@@ -221,7 +221,7 @@ running version to fork from; the installer snapshots a baked-in
 `@persist/seed` (skeleton dirs, empty identity files).
 
 Booting `<v>` is therefore a dumb mount: `@persist/<v>` always already
-exists. The kernel cmdline `theatreos.version=<v>` baked into the UKI
+exists. The version stamped into the booted UKI's `/usr/lib/os-release`
 selects which subvolume to mount.
 
 `@persist/<v>` is a normal RW subvolume. Writes from a normal boot
@@ -296,27 +296,45 @@ snapshots of an otherwise-RO source.** No overlayfs anywhere.
 For when you need to `pacman -S foo` on the box to test something
 before committing it to mkosi config.
 
-Enabled by editing the kernel cmdline at the systemd-boot menu (press
-`e`) and adding `theatreos.experiment=1`. No second UKI to ship; the
-discipline cost (a deliberate keystroke) makes experiment-mode
-deliberate.
+Entered live, no reboot, via `theatre-os experiment`. Exploits the
+fact that **btrfs subvolume mounts are inode-tracked, not path-tracked**
+— renaming a subvolume doesn't disturb a live mount. Same trick for
+both the OS and persist subvols:
 
-When the flag is set, the initrd:
+```
+# For each of: <subvol> = @os/<v>, @persist/<v>
+mv  <subvol>  <subvol>-experiment-<unique>     # live mount unaffected
+btrfs subvolume snapshot <subvol>-experiment-<unique> <subvol>
+                                                # fresh RO snapshot,
+                                                # will be mounted on
+                                                # next normal boot
 
-1. Snapshots `@os/<v>` → `@os/<v>-experiment-<unique>` (writable).
-2. Snapshots `@persist/<v>` → `@persist/<v>-experiment-<unique>` (writable).
-3. Mounts those snapshots instead of the originals.
-4. Sets a motd / journal banner so `ssh` sessions know they're in
-   experiment mode.
+# OS only (persist is already RW):
+btrfs property set <subvol>-experiment-<unique> ro false
+mount -o remount,rw <mountpoint>
+```
 
-All writes during this boot — to `/usr`, `/etc`, `/var`, anywhere —
-land in the experiment snapshots. Next normal boot reverts everything:
-the originals are mounted and the experiment snapshots are retained
-for forensic browsing (last N kept, older GC'd).
+After this, `/`, `/var`, `/home/kodi/.kodi` etc. are writable. Writes
+land in the `-experiment-<unique>` subvols (the ones the kernel still
+holds open). The freshly-snapshotted originals sit on disk untouched
+until the next boot, which mounts them and resumes normal mode.
+
+A motd / journal banner advertises experiment mode to anyone who
+SSHes in. `theatre-os experiment-off` reverses the swap (rename back,
+drop the throwaway, remount RO) — also live, no reboot.
 
 If you want to keep something from an experiment: edit the mkosi
 config in this repo and ship a new image. Same discipline as the
-iteration loop in the original design.
+iteration loop.
+
+**Caveat — needs prototyping in a VM.** The `mount -o remount,rw /`
+on a btrfs subvol whose `ro` property was just flipped is the part we
+want to verify works cleanly across the kernel versions we'll target.
+The mechanism is sound in principle; in practice there may be edge
+cases (the kernel may cache RO state somewhere we need to nudge).
+
+Old experiment subvols are retained for forensic browsing (last N
+kept, older GC'd).
 
 ### `theatre-os update`
 
@@ -325,7 +343,8 @@ snapshot and the experiment-mode guard. Roughly:
 
 ```
 theatre-os update:
-  1. If running with theatreos.experiment=1: refuse and exit.
+  1. If running in experiment mode (root mount is on
+     @os/<v>-experiment-<u>): refuse and exit.
   2. Determine running version <r> from /etc/os-release.
   3. systemd-sysupdate update      # downloads new tar+UKI, extracts
                                    # to @os/<n>, drops UKI in ESP, GCs old @os
@@ -410,8 +429,8 @@ behaviour; the custom pieces are noted.
 1. **Firmware → systemd-boot.** UEFI loads systemd-boot from the ESP,
    which enumerates `EFI/Linux/*.efi` UKIs and presents a menu (or
    auto-selects after timeout). The selected UKI bundles kernel +
-   initrd + cmdline, including `theatreos.version=<v>` baked at build
-   time. *Free.*
+   initrd; the matching version is stamped into the initrd's
+   `/usr/lib/os-release`. *Free.*
 
 2. **Kernel → initrd.** Standard mkosi-built initrd: drivers, udev,
    systemd in initrd context. *Free.*
@@ -420,14 +439,12 @@ behaviour; the custom pieces are noted.
    via udev and mounts the btrfs root at `/sysroot-data` (or similar).
    *Small custom piece*: a mount unit or generator in the initrd.
 
-4. **Resolve which subvolumes to mount.** Read `theatreos.version=<v>`
-   and (optionally) `theatreos.experiment=1` from cmdline.
-   - Normal: target subvols are `@os/<v>` and `@persist/<v>`. Both
-     pre-existing.
-   - Experiment: snapshot `@os/<v>` → `@os/<v>-experiment-<unique>` RW,
-     snapshot `@persist/<v>` → `@persist/<v>-experiment-<unique>` RW.
-     Target subvols are the snapshots. GC oldest experiment snapshots
-     beyond retention N. *Custom oneshot* in initrd.
+4. **Resolve which subvolumes to mount.** Read the version from
+   `/usr/lib/os-release`. Target subvols are `@os/<v>` and
+   `@persist/<v>`. Both pre-existing (created at install time of `<v>`).
+   - Pending restore: if `/efi/theatreos/pending-restore` exists, the
+     `theatre-os restore` swap is performed before mounting (see
+     "Manual persist snapshots").
 
 5. **Mount root and persist.** Mount the OS subvol (RO in normal mode,
    RW in experiment) as `/sysroot`. Mount the persist subvol at
@@ -619,16 +636,13 @@ value flows into the artefact filenames *and* `/usr/lib/os-release`'s
 `VERSION_ID=` in both the rootfs and the initrd image. One source of
 truth, no external stamping step.
 
-### Version doesn't go in the kernel cmdline
+### Kernel cmdline is generic
 
-The initrd reads the version from `/usr/lib/os-release` (which mkosi
-bakes into both the rootfs and the initrd image) — same value, same
-build, same source of truth. The cmdline stays generic across all
-versions. Same pattern as KDE Linux's mount-generator.
-
-The cmdline does carry one runtime-toggleable flag:
-`theatreos.experiment=1`, set by editing the cmdline at the
-systemd-boot menu (see "Updates & experiment mode"). Not baked.
+The cmdline is the same string in every UKI we build. The version
+flows from `mkosi.version` into the artefact filenames *and* into
+`/usr/lib/os-release`'s `VERSION_ID=` in both the rootfs and the
+initrd image; the initrd reads it from there to pick `@os/<v>` /
+`@persist/<v>`. Same pattern as KDE Linux's mount-generator.
 
 ### Building
 

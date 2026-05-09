@@ -41,7 +41,14 @@ moonlight-qt launches from within Kodi for game streaming.
 Reference implementations:
 - [`systemd/particleos`](https://github.com/systemd/particleos) — mkosi
   + sysupdate + UKI patterns.
-- KDE Linux — btrfs-snapshot + UKI + systemd-boot model we're copying.
+- KDE Linux — UKI + systemd-boot + sysupdate-driven image distribution
+  on Arch. They use a *different* on-disk model (erofs files in a
+  shared btrfs subvol, single shared persist, hash-tracked etc-merge
+  via [`etc-factory`](https://invent.kde.org/kde-linux/etc-factory))
+  to enable delta downloads via desync. We don't need delta downloads
+  and want stronger per-version isolation than they have, so we differ
+  on storage layout — but the UKI/sysupdate/bootflow patterns are
+  borrowed from them.
 
 ### Why this layout, not the alternatives
 
@@ -251,9 +258,12 @@ unbounded.
 - `/etc/` (except the few identity files above) — fully baked by mkosi.
   Edits during normal-mode SSH sessions fail loudly (`/` is RO). The
   only way to make a config change stick is to promote it into the
-  mkosi config in this repo. KDE Linux makes /etc persistent because
-  it's a general-purpose desktop; we're a sealed appliance and the
-  forced-forgetting is the whole point of the iteration loop.
+  mkosi config in this repo. KDE Linux makes /etc writable (with a
+  hash-tracked merge tool, `etc-factory`, that lets package upgrades
+  push new defaults without clobbering user edits) because it's a
+  general-purpose desktop where users edit configs by hand; we're a
+  sealed appliance and the forced-forgetting is the whole point of the
+  iteration loop.
 - `/usr/`, `/opt/`, installed packages — RO subvolume.
 - `/run`, `/tmp`, `/dev/shm` — standard tmpfs (systemd-managed).
 
@@ -318,6 +328,20 @@ The experiment-mode guard ensures `@persist/<n>` forks from the
 last-known-good persist (the running version's), not from an ephemeral
 experiment snapshot that won't exist after the next reboot.
 
+**`systemd-sysupdated` is masked at image build time.** sysupdate ships
+both a CLI (`systemd-sysupdate`) and a D-Bus daemon
+(`systemd-sysupdated`). The daemon is what tools like Plasma's
+Discover, `updatectl`, etc. drive to perform updates. We don't want
+that — anything calling the `org.freedesktop.sysupdate1` D-Bus
+interface would invoke a sysupdate install directly, bypassing the
+`theatre-os update` wrapper and skipping both the experiment-mode
+guard and the persist snapshot. So the image masks
+`systemd-sysupdated.service` and `dbus-org.freedesktop.sysupdate1.service`.
+The CLI is the only entry point. (sysupdate has no native pre/post
+hooks — see [systemd#35988](https://github.com/systemd/systemd/issues/35988)
+— so a wrapper is the only way to compose snapshot logic with
+sysupdate.)
+
 ## Boot sequence
 
 From power-on to a Kodi prompt. Most steps are stock systemd / mkosi
@@ -379,13 +403,30 @@ overlayfs, no exotic machinery; total LoC expected to be small.
 ## Phased plan
 
 1. mkosi: minimal bootable Arch image in a VM
-2. Add overlayroot (RO + tmpfs + persist partition) in VM
-3. Add systemd-sysupdate (N-slot subvolumes + UKI per slot) in VM
+2. Add `theatreos-data` btrfs layout (`@os/<v>` + `@persist/<v>`) +
+   initrd mount logic in VM
+3. Add systemd-sysupdate + `theatre-os update` wrapper in VM
 4. Port LibreELEC tweaks (BT/WOL/power-key/wake-chime) → systemd units
    in image
 5. Bring up on T480; provision AMT KVM access
 6. Daily-drive 2 weeks; iterate
 7. Cutover ZBook (same image, hardware-specific overrides)
+
+## Future work
+
+- **Boot-health telemetry.** Once a few versions are deployed, it would
+  be useful to glance at "which versions booted cleanly and which had
+  services crashing, and which services". Probably a small post-boot
+  script that snapshots `systemctl --failed` and the journal's error
+  count per boot, exports it somewhere queryable (HA? a flat file in
+  persist? push to a small dashboard?). Cheap to build, big win for
+  triaging "did that update I pushed actually work?" without SSHing in.
+  Punt until we have enough boot history to want it.
+- **Auto-rollback on boot failure** via `systemd-bless-boot` (the
+  same mechanism KDE Linux uses). Free, upstream-blessed, ties into
+  systemd-boot's boot-counting. Skipped for now — manual rollback via
+  the systemd-boot menu is fine while there's only one HTPC and the
+  human paying attention is the same one who pushed the update.
 
 ## Rejected alternatives
 

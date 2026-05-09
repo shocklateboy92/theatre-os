@@ -352,6 +352,56 @@ hooks — see [systemd#35988](https://github.com/systemd/systemd/issues/35988)
 — so a wrapper is the only way to compose snapshot logic with
 sysupdate.)
 
+### Manual persist snapshots: `theatre-os snapshot` / `restore`
+
+The auto per-version persist snapshot (one fork per OS install) is
+coarse: it doesn't help if you mutate `~/.kodi/` between OS updates
+and want to undo it. Common case: pushing new Kodi addons via
+ha-config's `deploy.sh`, then discovering one of them broke the UI.
+For these, take an explicit snapshot first.
+
+```
+theatre-os snapshot [name]
+  Snapshots @persist/<v> to @persist/<v>-snap-<timestamp>[-<name>].
+
+theatre-os snapshot list
+  Shows manual snapshots (name, timestamp, on-disk delta size).
+
+theatre-os snapshot delete <name-or-timestamp>
+  Drops a snapshot.
+
+theatre-os snapshot prune
+  Drops manual snapshots older than 30 days, with confirm.
+
+theatre-os restore <name-or-timestamp>
+  Marks the chosen snapshot for restoration on next boot. Reboot to
+  apply.
+```
+
+Restore is **not live** — too fragile to swap out a mounted persist
+subvol while userspace is using files. Instead, the `restore` command
+writes a small marker (e.g. `/efi/theatreos/pending-restore`) that the
+initrd checks before mounting persist:
+
+1. Read marker.
+2. Rename current `@persist/<v>` → `@persist/<v>-pre-restore-<ts>`
+   (kept around as an undo of the undo).
+3. Snapshot the chosen `@persist/<v>-snap-...` → fresh `@persist/<v>`.
+4. Delete marker.
+5. Proceed with normal mount.
+
+CoW makes snapshots cheap on disk — slow-changing state like Kodi's
+persists very little delta per snapshot. Take them liberally.
+
+This is **complementary to experiment mode**, not a replacement:
+
+- Experiment mode = throwaway scratch for `/usr` / `/etc` writes
+  (loud-failure paths in normal mode); both `@os` and `@persist`
+  snapshotted at boot.
+- Manual snapshots = explicit checkpoint of persist state for risky
+  persist-mutating operations (deploy.sh, manual SSH edits, library
+  imports).
+
 ## Boot sequence
 
 From power-on to a Kodi prompt. Most steps are stock systemd / mkosi
@@ -477,6 +527,43 @@ takes it; reverse on switch-back.
 Trade-off: no Bluetooth audio output (PipeWire is the modern BT audio
 stack). Acceptable for a couch-AVR HTPC. If we ever wanted BT headphones,
 we'd add PipeWire alongside but Kodi/moonlight would still bypass it.
+
+### Userdata: addons, skin, keymaps, settings
+
+theatre-os ships **no** Kodi customisations. The OS provides Arch's
+`kodi-standalone-service` package and a writable `/home/kodi/.kodi/`
+mountpoint (bind-mounted from `@persist/<v>`); everything inside that
+directory — addons (`service.avr.volume`, `script.theatre.lights.toggle`,
+`plugin.video.watchlist`, `context.go.to.show`, HAKA, etc.), the
+Arctic Zephyr modded skin, keymaps, library, watch state, the Kodi
+instance UUID — is owned by `ha-config/kodi/` and pushed to the box
+by `ha-config/kodi/deploy.sh`.
+
+This is a deliberate split:
+
+- **theatre-os**: Kodi the engine + the gbm/EGL/KMS plumbing + the
+  moonlight launcher script. Reproducible from this repo alone.
+- **ha-config**: which addons are installed, what the menu looks
+  like, where the AVR is, which lights to toggle on credits.
+  Reproducible from ha-config alone.
+
+`deploy.sh` writes to `/home/kodi/.kodi/` (was `/storage/.kodi/` on
+LibreELEC); needs path + SSH endpoint update at cutover. Its
+SQLite-poke into `Addons33.db` (to mark deployed addons enabled)
+keeps working unchanged.
+
+Because `~/.kodi/` lives on persist, `deploy.sh` doesn't intersect
+with the image/snapshot machinery: it just mutates the per-version
+persist subvol like Kodi itself does. Safe to run any time. For
+risky deploys, take a `theatre-os snapshot` first (see
+"Manual persist snapshots" above).
+
+Notable: the **Kodi instance UUID** in `~/.kodi/userdata/guisettings.xml`
+is what HA's `media_player.theatre` keys off. At cutover (ZBook →
+T480), copy `userdata/guisettings.xml` from the ZBook into the T480's
+persist before first Kodi launch — otherwise HA recreates the entity
+with a new ID and breaks ~5 automations + the `media_player.theatre`
+device automations.
 
 ### Risks to verify on real hardware
 

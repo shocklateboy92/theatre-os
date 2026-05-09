@@ -467,7 +467,8 @@ behaviour; the custom pieces are noted.
    systemd in initrd context. *Free.*
 
 3. **Mount the data partition.** Initrd finds `/dev/disk/by-label/theatreos-data`
-   via udev and mounts the btrfs root at `/sysroot-data` (or similar).
+   via udev and mounts the btrfs root at `/sysroot/system/data` (which
+   becomes `/system/data` after switch-root).
    *Small custom piece*: a mount unit or generator in the initrd.
 
 4. **Resolve which subvolumes to mount.** Read the version from
@@ -478,12 +479,14 @@ behaviour; the custom pieces are noted.
      "Manual persist snapshots").
 
 5. **Mount root and persist.** Mount `@os/<v>` RO as `/sysroot`. Mount
-   `@persist/<v>` at `/sysroot/run/persist` (or similar). Bind-mount
-   `/sysroot/var` from `<persist>/var`, `/sysroot/home/kodi/.kodi`
-   from `<persist>/home-kodi-kodi`, `/sysroot/etc/machine-id` from
-   `<persist>/etc-machine-id`, etc. *Custom* `.mount` units shipped in
-   the image; mkosi config pre-creates the empty mountpoints in the OS
-   tree.
+   `@persist/<v>` at `/sysroot/system/persist`. Bind-mount
+   `/sysroot/var` from `/sysroot/system/persist/var`,
+   `/sysroot/home/kodi/.kodi` from `/sysroot/system/persist/home/kodi/.kodi`,
+   `/sysroot/etc/machine-id` from `/sysroot/system/persist/etc/machine-id`,
+   `/sysroot/etc/ssh/` from `/sysroot/system/persist/etc/ssh/`. *Custom*
+   `.mount` units shipped in the image; mkosi config pre-creates the
+   empty mountpoints in the OS tree (`/system/data`, `/system/persist`,
+   plus the bind targets).
 
 6. **switch-root** into `/sysroot`.
 
@@ -498,7 +501,12 @@ behaviour; the custom pieces are noted.
 
 9. **Kodi starts.** `kodi-standalone-service` (Arch package) launches
    Kodi as user `kodi` against `/dev/dri/card0` via gbm/EGL/KMS, on
-   tty1. See "Kodi & moonlight session" below.
+   tty1. The image masks `getty@tty1.service` (a `/dev/null` symlink
+   in `/etc/systemd/system/`, shipped via `mkosi.extra/`) so systemd's
+   default getty doesn't fight Kodi for the tty — same approach
+   display managers like sddm use, just baked statically since we
+   never want getty on tty1. Other ttys still get gettys for emergency
+   console access via AMT KVM. See "Kodi & moonlight session" below.
 
 ### Custom code summary
 
@@ -739,7 +747,7 @@ Verify=no
 
 [Target]
 Type=subvolume
-Path=/sysroot-data/@os/
+Path=/system/data/@os/
 MatchPattern=@v
 ReadOnly=yes
 InstancesMax=10
@@ -813,9 +821,13 @@ mkosi.extra/                          # files overlaid onto the image as-is:
                                       #   /root/.ssh/authorized_keys, etc.
 mkosi.images/
   release/
-    mkosi.conf                        # Format=tar, SplitArtifacts=uki
+    mkosi.conf                        # Format=tar, SplitArtifacts=uki,
+                                      # Output=theatre-os
   installer/
-    mkosi.conf                        # Format=disk, Bootable=yes
+    mkosi.conf                        # Format=disk, Bootable=yes,
+                                      # Output=theatre-os
+    mkosi.extra/seed-skeleton/        # checked-in empty dirs/files for
+                                      #   the initial @persist/seed
     mkosi.repart/
       00-esp.conf
       10-data.conf
@@ -857,8 +869,12 @@ GrowFileSystem=yes
 ```
 
 (Schematic — `<v>` is `&v` in actual config, repart specifier for
-ImageVersion. `<rootfs>` and `<seed-skeleton>` are paths produced
-during the build by mkosi prep scripts.)
+ImageVersion. `<rootfs>` is the rootfs subimage's output, available
+to the installer subimage's repart via mkosi's build dependency
+mechanism. `<seed-skeleton>` is a directory checked into this repo at
+`mkosi.images/installer/mkosi.extra/seed-skeleton/` containing the
+empty identity files and bind-target stubs verbatim — no script, just
+files in git.)
 
 The `seed-skeleton` is a tiny tree of empty mountpoints — empty
 `/etc/machine-id`, empty `/etc/ssh/`, empty `/var/log/`, empty

@@ -288,6 +288,21 @@ unbounded.
 Both updates and experiments use the same primitive: **btrfs writable
 snapshots of an otherwise-RO source.** No overlayfs anywhere.
 
+The `theatre-os` CLI is the single entry point for all of this:
+
+| Command | What it does |
+|---|---|
+| `theatre-os update` | Pull the next release: invoke sysupdate, snapshot persist, paired GC. Refuses if in experiment mode. |
+| `theatre-os experiment` | Enter experiment mode live (no reboot): swap-snapshot `@os/<v>` and `@persist/<v>`, flip `/` to RW. |
+| `theatre-os experiment-off` | Reverse the swap, drop the throwaway, remount RO. Live, no reboot. |
+| `theatre-os snapshot [name]` | Manually snapshot persist for a checkpoint before risky persist mutations. |
+| `theatre-os snapshot list` | Show manual snapshots. |
+| `theatre-os snapshot delete <id>` | Drop a manual snapshot. |
+| `theatre-os snapshot prune` | Drop snapshots older than 30 days, with confirm. |
+| `theatre-os restore <id>` | Mark a snapshot for restoration on next boot (initrd performs the swap). |
+
+Details for each in the subsections below.
+
 ### Normal boot
 
 - `@os/<v>` is RO. Mounted directly at `/`.

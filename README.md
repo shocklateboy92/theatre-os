@@ -62,10 +62,11 @@ Reference implementations:
   static UKI enumeration is enough; no `grub.cfg` regeneration script,
   no GRUB on the boot path.
 - **Kernel in UKI, not inside the snapshot**: atomicity comes from
-  sysupdate creating snapshot+UKI together, both signed by the same
-  build. Putting the kernel physically inside the snapshot would
-  require GRUB to read it out (the only thing systemd-boot can't do).
-  Not worth the complexity.
+  sysupdate dropping the snapshot and the UKI in one transaction —
+  same build, same `@v`, paired by sysupdate's transfer manifest.
+  Putting the kernel physically inside the snapshot would require
+  GRUB to read it out (the only thing systemd-boot can't do). Not
+  worth the complexity.
 - **Not erofs image files on ext4**: equivalent N-slot capability, but
   loop-mounting an image inside initrd adds a layer over a plain btrfs
   subvol mount. btrfs RO snapshots give the same immutability guarantee
@@ -147,8 +148,9 @@ Image version = build datetime, UTC, minute resolution: `2026-05-09-1422`.
 
 - Sorts correctly as a plain string (sysupdate's `@v` matching is
   lexicographic, not version-aware), so newest builds always win.
-- No external counter to maintain — the build script just stamps
-  `date -u +%Y-%m-%d-%H%M`. Practically never collides.
+- No external counter to maintain — the executable `mkosi.version` in
+  the repo (a one-line script) just stamps `date -u +%Y-%m-%d-%H%M`
+  and mkosi reads its stdout. Practically never collides.
 - Human-readable in the systemd-boot menu: you can tell at a glance
   which entry is newer when troubleshooting.
 - Git SHA is recorded separately in `/etc/os-release` (`THEATREOS_GIT_SHA=`)
@@ -434,7 +436,7 @@ initrd checks before mounting persist:
 1. Read marker.
 2. Rename current `@persist/<v>` → `@persist/<v>-pre-restore-<ts>`
    (kept around as an undo of the undo).
-3. Snapshot the chosen `@persist/<v>-snap-...` → fresh `@persist/<v>`.
+3. Snapshot the chosen `@persist/<v>-snap-<id>` → fresh `@persist/<v>`.
 4. Delete marker.
 5. Proceed with normal mount.
 
@@ -626,8 +628,8 @@ device automations.
 
 ## Build & publish
 
-mkosi does almost everything. Two small wrapper scripts in this repo
-glue the version-stamp + upload steps around it.
+mkosi does almost everything. A small `publish.sh` script and an
+executable `mkosi.version` are the only repo-side glue.
 
 ### What mkosi produces for us
 
@@ -950,8 +952,9 @@ isn't precious by design.)
   reproducibility and atomic OS rollback
 - **NixOS**: too unfamiliar; AI-generated Nix is hard to review safely
 
-(See "Why this layout" under Architecture for rejected boot/storage
-designs: A/B partitions, GRUB+grub-btrfs, erofs files, kernel-in-snapshot.)
+(See "Why this layout — alternatives we rejected" under Architecture
+for rejected boot/storage designs: A/B partitions, GRUB+grub-btrfs,
+erofs files, kernel-in-snapshot.)
 
 ## Secrets
 

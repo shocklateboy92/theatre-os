@@ -133,6 +133,12 @@ Two accounts exist on the running system:
 Out-of-band recovery: Intel AMT (KVM + SOL) on the T480.
 See top-level `AGENTS.md` for credentials.
 
+The kernel cmdline includes `console=tty0 console=ttyS0,115200` so
+that AMT's Serial-over-LAN sees kernel + systemd output during boot
+and any panic. Kodi runs on tty1 and is unaffected. (AMT SOL only
+shows kernel onward, not pre-kernel firmware/POST — for those, use
+AMT KVM. See `ha-config/t480-hardware-quirks.md`.)
+
 ## Versioning
 
 Image version = build datetime, UTC, minute resolution: `2026-05-09-1422`.
@@ -370,6 +376,12 @@ The CLI is the only entry point. (sysupdate has no native pre/post
 hooks — see [systemd#35988](https://github.com/systemd/systemd/issues/35988)
 — so a wrapper is the only way to compose snapshot logic with
 sysupdate.)
+
+The `systemd-sysupdate.timer` (the periodic auto-update mechanism)
+is also masked. Updates happen only when explicitly invoked by
+`theatre-os update`, never on a schedule. This is deliberate — an
+auto-update at 03:00 that breaks the box is harder to debug than one
+the human just pushed.
 
 ### Manual persist snapshots: `theatre-os snapshot` / `restore`
 
@@ -639,7 +651,9 @@ truth, no external stamping step.
 
 ### Kernel cmdline is generic
 
-The cmdline is the same string in every UKI we build. The version
+The cmdline is the same string in every UKI we build (currently
+something like `quiet rw console=tty0 console=ttyS0,115200` —
+see Accounts & remote access for the SOL rationale). The version
 flows from `mkosi.version` into the artefact filenames *and* into
 `/usr/lib/os-release`'s `VERSION_ID=` in both the rootfs and the
 initrd image; the initrd reads it from there to pick `@os/<v>` /
@@ -758,7 +772,7 @@ otherwise it boots like any other build.
 
 ```
 # on a rescue env with the target disk visible as /dev/nvme0n1
-xzcat theatre-os-installer_<v>.raw.xz | dd of=/dev/nvme0n1 bs=4M status=progress
+xzcat theatre-os_<v>.raw.xz | dd of=/dev/nvme0n1 bs=4M status=progress
 sync
 reboot
 ```
@@ -774,7 +788,10 @@ for per-output overrides.
 ```
 mkosi.conf                            # shared base
 mkosi.version                         # executable, prints date stamp
-mkosi.extra/                          # shared payload
+mkosi.extra/                          # files overlaid onto the image as-is:
+                                      #   custom systemd units (.mount, masks,
+                                      #   sleep.d hooks), the theatre-os CLI,
+                                      #   /root/.ssh/authorized_keys, etc.
 mkosi.images/
   release/
     mkosi.conf                        # Format=tar, SplitArtifacts=uki
@@ -786,7 +803,12 @@ mkosi.images/
 ```
 
 `mkosi build` produces both subimages by default; `mkosi --image=release build`
-or `--image=installer build` builds just one.
+or `--image=installer build` builds just one. By default mkosi names
+subimage outputs after the subimage rather than the top-level
+`ImageId`, so we set `Output=theatre-os` in each subimage's mkosi.conf
+to keep names consistent: `theatre-os_<v>.tar.xz`,
+`theatre-os_<v>.efi`, `theatre-os_<v>.raw.xz`. (The release and
+installer outputs distinguish themselves by extension.)
 
 ### Installer disk layout (built by repart)
 

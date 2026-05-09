@@ -50,7 +50,7 @@ Reference implementations:
   on storage layout — but the UKI/sysupdate/bootflow patterns are
   borrowed from them.
 
-### Why this layout, not the alternatives
+### Why this layout — alternatives we rejected
 
 - **Not strict A/B partitions**: only 2 rollback slots. If push-a-fix
   also breaks, you can't go back two. N snapshots gives unlimited
@@ -106,7 +106,8 @@ dock/USB-NIC specific to the ZBook and don't necessarily apply.
    btrfs swap-snapshot trick). Now `pacman -S` / `/etc` edits work
    and land in throwaway subvols.
 3. `theatre-os experiment-off` (or reboot) → experimental writes vanish.
-4. Promote working changes into `mkosi/` config in this repo.
+4. Promote working changes into the mkosi config in this repo
+   (`mkosi.conf`, `mkosi.extra/`, `mkosi.images/`, etc.).
 5. `mkosi build` → `./scripts/publish.sh` → `theatre-os update` on
    the box, reboot.
 6. Verify; if broken, reboot and pick the previous UKI from the
@@ -121,10 +122,11 @@ Two accounts exist on the running system:
 
 - **`root`** — administration. SSH login is the only access path; key
   auth only, password auth disabled. The authorised pubkey lives in
-  this repo (`mkosi/pubkeys/root.pub`, public by design) and is baked
-  into the RO root at `/root/.ssh/authorized_keys`. Rotating the
-  allowed key = edit the file in this repo and ship a new image. There
-  is no per-host customisation; one image, one key, all hosts.
+  this repo at `mkosi.extra/root/.ssh/authorized_keys` (public by
+  design) and is baked verbatim into the RO root by mkosi at the same
+  path. Rotating the allowed key = edit the file in this repo and
+  ship a new image. There is no per-host customisation; one image,
+  one key.
 - **`kodi`** — service account created by Arch's `kodi-standalone-service`
   package. Runs Kodi (and moonlight-qt invoked from it). Member of
   `audio video input render wheel network`. No login shell, no SSH.

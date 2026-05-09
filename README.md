@@ -480,11 +480,155 @@ we'd add PipeWire alongside but Kodi/moonlight would still bypass it.
 - HDR / refresh-rate state restoration when control returns to Kodi
   (moonlight may have changed the mode mid-stream).
 
-### Out of scope for this repo
+## Build & publish
 
-The Kodi addons, userdata, and per-user config (skins, libraries,
-remote mappings) live in `ha-config/kodi/` and survive image updates
-via the `/home/kodi/.kodi/` persist mount.
+mkosi does almost everything. Two small wrapper scripts in this repo
+glue the version-stamp + upload steps around it.
+
+### What mkosi produces for us
+
+With `Format=tar`, `CompressOutput=xz`, `SplitArtifacts=uki`,
+`Checksum=yes`, and `ImageVersion=` set from `mkosi.version`, one
+`mkosi build` invocation produces:
+
+```
+mkosi.output/
+  theatre-os_<v>.tar.xz       # rootfs (sysupdate Type=url-tar input)
+  theatre-os_<v>.efi          # UKI (sysupdate Type=url-file input)
+  theatre-os_<v>.SHA256SUMS   # checksums covering both
+```
+
+Notably we **do not** need to:
+- Tar the rootfs ourselves (`Format=tar`).
+- Run `ukify` separately (`Bootloader=systemd-boot` + `SplitArtifacts=uki`).
+- Hash the artefacts (`Checksum=yes`).
+- Stamp the version into multiple places (`ImageVersion=` flows into
+  the artefact filenames *and* the rootfs's `/usr/lib/os-release`
+  *and* the initrd's `/usr/lib/os-release`).
+
+mkosi and sysupdate are designed to compose; we lean on that.
+
+### Version stamping
+
+`mkosi.version` is **executable** in this repo:
+
+```sh
+#!/bin/sh
+exec date -u +%Y-%m-%d-%H%M
+```
+
+mkosi runs it on every build and uses stdout as `ImageVersion=`. That
+value flows into the artefact filenames *and* `/usr/lib/os-release`'s
+`VERSION_ID=` in both the rootfs and the initrd image. One source of
+truth, no external stamping step.
+
+### Version doesn't go in the kernel cmdline
+
+The initrd reads the version from `/usr/lib/os-release` (which mkosi
+bakes into both the rootfs and the initrd image) — same value, same
+build, same source of truth. The cmdline stays generic across all
+versions. Same pattern as KDE Linux's mount-generator.
+
+The cmdline does carry one runtime-toggleable flag:
+`theatreos.experiment=1`, set by editing the cmdline at the
+systemd-boot menu (see "Updates & experiment mode"). Not baked.
+
+### Building
+
+```
+mkosi build
+```
+
+That's the build. mkosi handles tar, UKI splitting, compression,
+SHA256SUMS, version stamping. `mkosi.output/` is cleaned on each
+build, so it always contains exactly one version's artefacts.
+
+### `scripts/publish.sh`
+
+Discovers the version from the local SHA256SUMS file (mkosi just wrote
+it; we don't need to ask mkosi.version again). Fetches the existing
+master SHA256SUMS from dufs (if any), appends our entries, uploads
+everything. Order matters: SHA256SUMS last so consumers don't see a
+stale checksum file mid-upload.
+
+```sh
+#!/bin/sh
+# usage: publish.sh <hostname>   e.g. publish.sh theatre-t480
+set -eu
+HOST="${1:?host required}"
+PUSH="https://push.apps.lasath.com/${HOST}"
+PULL="https://static.apps.lasath.com/sysupdate/${HOST}"
+
+# Local SHA256SUMS lists exactly what mkosi built this run.
+LOCAL_SUMS="$(ls mkosi.output/theatre-os_*.SHA256SUMS)"
+
+# Upload artefacts referenced in the local sums file.
+awk '{print $2}' "$LOCAL_SUMS" | while read -r f; do
+  curl -fT "mkosi.output/$f" "$PUSH/"
+done
+
+# Merge with whatever's already on dufs, then upload.
+{ curl -fsS "$PULL/SHA256SUMS" 2>/dev/null || true; cat "$LOCAL_SUMS"; } \
+  | sort -u > /tmp/SHA256SUMS.merged
+curl -fT /tmp/SHA256SUMS.merged "$PUSH/SHA256SUMS"
+
+echo "Published"
+```
+
+Idempotent: re-running for the same build is a no-op (PUT replaces with
+identical bytes; `sort -u` keeps no duplicates).
+
+The only script we ship.
+
+### Pull-side: sysupdate transfer files
+
+Two `*.transfer` files baked into the image, one per artefact, sharing
+the same `@v` so sysupdate treats them as one update transaction:
+
+`/usr/lib/sysupdate.d/10-rootfs.transfer`:
+```
+[Source]
+Type=url-tar
+Path=https://static.apps.lasath.com/sysupdate/theatre-t480/
+MatchPattern=theatre-os_@v.tar.xz
+
+[Target]
+Type=subvolume
+Path=/sysroot-data/@os/
+MatchPattern=@v
+ReadOnly=yes
+InstancesMax=10
+```
+
+`/usr/lib/sysupdate.d/20-uki.transfer`:
+```
+[Source]
+Type=url-file
+Path=https://static.apps.lasath.com/sysupdate/theatre-t480/
+MatchPattern=theatre-os_@v.efi
+
+[Target]
+Type=regular-file
+Path=/efi/EFI/Linux/
+MatchPattern=theatre-os_@v.efi
+InstancesMax=10
+```
+
+The hostname-in-the-path means each target host gets its own subdir —
+even if the image is identical for now (T480 and ZBook), keeping them
+separately namespaced means we can ship hardware-specific images later
+without changing the layout.
+
+`Verify=` is left at the default (`signature`); we override per-source
+to use SHA256SUMS-only since we're not signing (see Architecture →
+Distribution).
+
+### CI later (not now)
+
+A GitHub Action could run `build.sh && publish.sh` on push to `main`.
+Needs a self-hosted runner (mkosi requires root + chroots; public
+runners don't comfortably do this). Skip until iterating manually
+becomes annoying.
 
 ## Phased plan
 

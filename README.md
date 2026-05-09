@@ -11,8 +11,8 @@ moonlight-qt launches from within Kodi for game streaming.
   release: `theatre-os_<v>.tar.xz` (root tree) + `theatre-os_<v>.efi`
   (matching UKI) + `SHA256SUMS`.
 - **Distribution**: uploaded via WebDAV PUT to the homelab dufs
-  instance at `push.apps.lasath.com/theatre-<host>/`, served read-only
-  via HTTPS at `static.apps.lasath.com/sysupdate/theatre-<host>/`. LAN-only
+  instance at `push.apps.lasath.com/theatre-t480/`, served read-only
+  via HTTPS at `static.apps.lasath.com/sysupdate/theatre-t480/`. LAN-only
   DNS, real Let's Encrypt cert. No GPG signing — single-tenant LAN, the
   build host and image host are inside the same trust boundary;
   HTTPS + SHA256SUMS catches transport corruption and is the realistic
@@ -84,12 +84,18 @@ Reference implementations:
 
 ## Hardware
 
-- **Staging + initial prod**: Lenovo ThinkPad T480 (`192.168.0.78`).
-  See `ha-config/t480-hardware-quirks.md`.
-- **Eventual**: HP ZBook Firefly 14 G7 (current LibreELEC box).
-  See `ha-config/zbook-libreelec-tweaks.md` for the spec of behaviours
-  that must work post-rebuild.
-- Both have Intel vPro/AMT for OOB recovery.
+The HTPC is a **Lenovo ThinkPad T480** (during staging at
+`192.168.0.78`, post-cutover takes over `theatre.home.lasath.com`
+from the existing LibreELEC ZBook). Has Intel vPro / AMT for OOB
+recovery — see `ha-config/t480-hardware-quirks.md`.
+
+The current production box (HP ZBook Firefly 14 G7 running LibreELEC)
+gets unplugged from the AV setup at cutover. theatre-os is **not**
+intended to run on it. `ha-config/zbook-libreelec-tweaks.md` is kept
+as a reference for the *behaviours* (BT wake, WOL, power-key
+handling, wake chime, sleep mode) that need to keep working post-
+cutover, but most of the *implementation* tweaks in that doc are
+dock/USB-NIC specific to the ZBook and don't necessarily apply.
 
 ## Iteration loop
 
@@ -249,8 +255,9 @@ Identity files (machine-id, host keys) are **generated on first boot**,
 not baked into the image. The image ships without them; standard systemd
 units (`systemd-machine-id-setup`, sshd's keygen) populate them on the
 persist subvol the first time the box boots a given OS version. This
-keeps the image artifact non-sensitive and lets one image run on
-multiple hosts (T480, ZBook) without identity collisions.
+keeps the image artifact non-sensitive (no leakable host keys baked
+in) and avoids identity collisions if the same image is ever
+re-flashed onto a replacement box.
 
 We disable `systemd-coredump` writing coredumps to disk — a
 crash-looping service could otherwise fill `/var/lib/systemd/coredump/`
@@ -556,11 +563,10 @@ stale checksum file mid-upload.
 
 ```sh
 #!/bin/sh
-# usage: publish.sh <hostname>   e.g. publish.sh theatre-t480
+# usage: publish.sh
 set -eu
-HOST="${1:?host required}"
-PUSH="https://push.apps.lasath.com/${HOST}"
-PULL="https://static.apps.lasath.com/sysupdate/${HOST}"
+PUSH="https://push.apps.lasath.com/theatre-t480"
+PULL="https://static.apps.lasath.com/sysupdate/theatre-t480"
 
 # Local SHA256SUMS lists exactly what mkosi built this run.
 LOCAL_SUMS="$(ls mkosi.output/theatre-os_*.SHA256SUMS)"
@@ -617,10 +623,8 @@ MatchPattern=theatre-os_@v.efi
 InstancesMax=10
 ```
 
-The hostname-in-the-path means each target host gets its own subdir —
-even if the image is identical for now (T480 and ZBook), keeping them
-separately namespaced means we can ship hardware-specific images later
-without changing the layout.
+The path namespaces by host (`theatre-t480/`) even though there's only
+one box; cheap insurance in case we ever want a second target later.
 
 `Verify=` is left at the default (`signature`); we override per-source
 to use SHA256SUMS-only since we're not signing (see Architecture →
@@ -768,9 +772,12 @@ isn't precious by design.)
    first-boot grow in VM
 5. Port LibreELEC tweaks (BT/WOL/power-key/wake-chime) → systemd units
    in image
-6. Bring up on T480 via AMT KVM + `dd` of installer image
-7. Daily-drive 2 weeks; iterate
-8. Cutover ZBook (same images, hardware-specific overrides)
+6. Bring up on T480 via AMT KVM + `dd` of installer image. Stage at
+   `theatre-t480.home.lasath.com`, ZBook stays prod at `theatre`.
+7. Daily-drive on T480 in parallel with ZBook for 2 weeks; iterate.
+8. Cutover: rename T480 to `theatre.home.lasath.com`, point HA's
+   Kodi integration at the T480 IP, update the WOL MAC in HA's
+   `theatre_turn_on` script. Unplug the ZBook from the AV setup.
 
 ## Future work
 

@@ -149,7 +149,7 @@ Artifacts use the version as their stem:
 Single GPT on the internal NVMe, two partitions:
 
 ```
-Part 1: ESP             1 GiB    vfat    GUID: ESP                   label: ESP
+Part 1: ESP             2 GiB    vfat    GUID: ESP                   label: ESP
 Part 2: data btrfs      rest     btrfs   GUID: Linux generic data    label: theatreos-data
 ```
 
@@ -171,8 +171,11 @@ space flowing freely between them and simplifies the GPT. The blast
 radius of fs corruption covers both, but recovery requires AMT KVM +
 USB rescue regardless, so the isolation argument is weak.
 
-ESP is oversized at 1 GiB (UKIs are ~50–100 MB, retention ~10 versions
-= <1 GiB). Cheap insurance; shrinking later is annoying.
+ESP is oversized at 2 GiB (UKIs are ~50–100 MB, retention ~10 versions
+= <1 GiB). Comfortably within FAT32/firmware tolerances; the headroom
+exists so we can experiment with alternate boot artefacts (recovery
+UKIs, debug variants, multi-profile UKIs) in future without
+re-partitioning. Shrinking later is annoying.
 
 No swap (HTPC has ample RAM; swap on btrfs is fiddly). No separate
 `/boot` partition — UKIs live directly in the ESP and systemd-boot
@@ -630,17 +633,144 @@ Needs a self-hosted runner (mkosi requires root + chroots; public
 runners don't comfortably do this). Skip until iterating manually
 becomes annoying.
 
+## Initial install / disk provisioning
+
+Bootstrapping a fresh box. Updates assume the GPT layout, ESP, and
+btrfs subvolumes already exist; install creates them from nothing.
+
+### Approach: build a `.raw.xz`, `dd` it to the disk
+
+We build a complete bootable disk image as a **second mkosi
+subimage** (sharing the same base config as the release build), then
+`dd` it onto the target disk via AMT KVM or a USB rescue env. First
+boot, systemd-repart grows the data partition to fill the disk;
+otherwise it boots like any other build.
+
+```
+# on a rescue env with the target disk visible as /dev/nvme0n1
+xzcat theatre-os-installer_<v>.raw.xz | dd of=/dev/nvme0n1 bs=4M status=progress
+sync
+reboot
+```
+
+No live installer, no Calamares, no separate provisioning tool.
+
+### Repo layout
+
+mkosi's subimage mechanism: a top-level `mkosi.conf` for shared
+settings, plus `mkosi.images/release/` and `mkosi.images/installer/`
+for per-output overrides.
+
+```
+mkosi.conf                            # shared base
+mkosi.version                         # executable, prints date stamp
+mkosi.extra/                          # shared payload
+mkosi.images/
+  release/
+    mkosi.conf                        # Format=tar, SplitArtifacts=uki
+  installer/
+    mkosi.conf                        # Format=disk, Bootable=yes
+    mkosi.repart/
+      00-esp.conf
+      10-data.conf
+```
+
+`mkosi build` produces both subimages by default; `mkosi --image=release build`
+or `--image=installer build` builds just one.
+
+### Installer disk layout (built by repart)
+
+`mkosi.images/installer/mkosi.repart/00-esp.conf`:
+```
+[Partition]
+Type=esp
+Format=vfat
+CopyFiles=/efi:/
+SizeMinBytes=2G
+SizeMaxBytes=2G
+```
+
+`mkosi.images/installer/mkosi.repart/10-data.conf`:
+```
+[Partition]
+Type=linux-generic
+Label=theatreos-data
+Format=btrfs
+Subvolumes=/@os/<v>:ro /@persist/seed /@persist/<v>
+DefaultSubvolume=/@os/<v>
+CopyFiles=<rootfs>:/@os/<v>
+CopyFiles=<seed-skeleton>:/@persist/seed
+CopyFiles=<seed-skeleton>:/@persist/<v>
+SizeMinBytes=4G
+GrowFileSystem=yes
+```
+
+(Schematic — `<v>` is `&v` in actual config, repart specifier for
+ImageVersion. `<rootfs>` and `<seed-skeleton>` are paths produced
+during the build by mkosi prep scripts.)
+
+The `seed-skeleton` is a tiny tree of empty mountpoints — empty
+`/etc/machine-id`, empty `/etc/ssh/`, empty `/var/log/`, empty
+`/home/kodi/.kodi/`, and any other persist bind targets. It exists
+solely so the bind-mounts in the boot sequence have somewhere to land
+on the very first boot. systemd-firstboot + sshd-keygen populate the
+identity files on first boot; Kodi populates `/home/kodi/.kodi` on
+first launch; etc.
+
+For initial install, `@persist/seed` and `@persist/<v>` start
+identical. Subsequent updates fork new `@persist/<v>` from the
+running version's persist (per `theatre-os update`), not from seed.
+Seed is only used once, at very-first-boot, ever.
+
+### First-boot grow
+
+The data partition ships at ~4 GiB; the target disk is ~256 GiB+.
+`systemd-repart.service` runs early in boot, sees `GrowFileSystem=yes`
+in the shipped repart config (also baked into the OS image so it's
+available on subsequent boots — irrelevant after the first since
+nothing's left to grow). One pass, partition expands to fill the
+disk, btrfs grows, done.
+
+### What goes on the dufs server
+
+The installer `.raw.xz` is a one-off-per-host artefact — you only
+need a fresh installer when reprovisioning a box from scratch, which
+is rare. Three options:
+
+- Upload it alongside releases at install time, delete it after the
+  HTPC is up.
+- Keep it in `mkosi.output/` on the build host, transfer ad-hoc.
+- Upload to dufs under a separate path (`installers/`) for
+  occasional reuse.
+
+Default: keep on build host, transfer ad-hoc. Build is reproducible,
+can always rebuild if needed. dufs stays focused on update artefacts.
+
+### Recovery via this same image
+
+Useful side effect: the same installer image is also the recovery
+tool. If a box's persist subvol gets unrecoverably corrupted, or you
+want to start clean, `dd` the installer over again. AMT KVM mounts a
+USB rescue env, you `dd`, you reboot. Fifteen minutes from "broken"
+to "fresh."
+
+(Persist data is lost. That's acceptable — `/home/kodi/.kodi/` lives
+in HA backups via `ha-config`; identity files regenerate; OS state
+isn't precious by design.)
+
 ## Phased plan
 
-1. mkosi: minimal bootable Arch image in a VM
+1. mkosi: minimal bootable Arch image in a VM (release subimage only)
 2. Add `theatreos-data` btrfs layout (`@os/<v>` + `@persist/<v>`) +
    initrd mount logic in VM
 3. Add systemd-sysupdate + `theatre-os update` wrapper in VM
-4. Port LibreELEC tweaks (BT/WOL/power-key/wake-chime) → systemd units
+4. Add installer subimage (Format=disk + repart subvols) + verify
+   first-boot grow in VM
+5. Port LibreELEC tweaks (BT/WOL/power-key/wake-chime) → systemd units
    in image
-5. Bring up on T480; provision AMT KVM access
-6. Daily-drive 2 weeks; iterate
-7. Cutover ZBook (same image, hardware-specific overrides)
+6. Bring up on T480 via AMT KVM + `dd` of installer image
+7. Daily-drive 2 weeks; iterate
+8. Cutover ZBook (same images, hardware-specific overrides)
 
 ## Future work
 

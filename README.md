@@ -21,10 +21,10 @@ moonlight-qt launches from within Kodi for game streaming.
   on the HTPC pulls each release over HTTPS. The transfer manifest has
   two entries: the `.tar.xz` is extracted (`Type=url-tar`) into a fresh
   btrfs subvolume on the rootfs partition (`Type=subvolume`); the `.efi`
-  UKI is dropped into `/boot/EFI/Linux/` (`Type=regular-file`).
+  UKI is dropped into `/efi/EFI/Linux/` (`Type=regular-file`).
   systemd-boot enumerates UKIs → boot menu shows every installed
-  version. Rollback = pick an older entry. Old subvolumes + UKIs GC'd
-  by sysupdate retention policy (keep N).
+  version. Rollback: pick an older entry. Old subvolumes + UKIs are
+  GC'd by sysupdate retention policy (keep N).
 - **Runtime**: RO `@os/<v>` btrfs subvolume mounted directly at `/` —
   no overlayfs. Writes to `/usr` and most of `/etc` fail loudly,
   enforcing the discipline that config changes must be promoted to
@@ -107,8 +107,8 @@ dock/USB-NIC specific to the ZBook and don't necessarily apply.
    and land in throwaway subvols.
 3. `theatre-os experiment-off` (or reboot) → experimental writes vanish.
 4. Promote working changes into `mkosi/` config in this repo.
-5. `mkosi build` → publish image → `theatre-os update` on the box,
-   reboot.
+5. `mkosi build` → `./scripts/publish.sh` → `theatre-os update` on
+   the box, reboot.
 6. Verify; if broken, reboot and pick the previous UKI from the
    systemd-boot menu (or recover via AMT KVM if unbootable).
 
@@ -130,7 +130,7 @@ Two accounts exist on the running system:
   `audio video input render wheel network`. No login shell, no SSH.
   Userdata at `/home/kodi/.kodi/` is on the persist subvol.
 
-Out-of-band recovery: Intel AMT (KVM + SOL) on both target machines.
+Out-of-band recovery: Intel AMT (KVM + SOL) on the T480.
 See top-level `AGENTS.md` for credentials.
 
 ## Versioning
@@ -446,13 +446,13 @@ behaviour; the custom pieces are noted.
      `theatre-os restore` swap is performed before mounting (see
      "Manual persist snapshots").
 
-5. **Mount root and persist.** Mount the OS subvol (RO in normal mode,
-   RW in experiment) as `/sysroot`. Mount the persist subvol at
-   `/sysroot/run/persist` (or similar). Bind-mount `/sysroot/var` from
-   `<persist>/var`, `/sysroot/home/kodi/.kodi` from `<persist>/home-kodi-kodi`,
-   `/sysroot/etc/machine-id` from `<persist>/etc-machine-id`, etc.
-   *Custom* `.mount` units shipped in the image; mkosi config
-   pre-creates the empty mountpoints in the OS tree.
+5. **Mount root and persist.** Mount `@os/<v>` RO as `/sysroot`. Mount
+   `@persist/<v>` at `/sysroot/run/persist` (or similar). Bind-mount
+   `/sysroot/var` from `<persist>/var`, `/sysroot/home/kodi/.kodi`
+   from `<persist>/home-kodi-kodi`, `/sysroot/etc/machine-id` from
+   `<persist>/etc-machine-id`, etc. *Custom* `.mount` units shipped in
+   the image; mkosi config pre-creates the empty mountpoints in the OS
+   tree.
 
 6. **switch-root** into `/sysroot`.
 
@@ -464,7 +464,6 @@ behaviour; the custom pieces are noted.
    just need correct ordering (after persist binds, before consumers).
 
 8. **Normal systemd boot.** networkd, sshd, bluetoothd, etc. *Free.*
-   In experiment mode, a motd/journal banner advertises the mode.
 
 9. **Kodi starts.** `kodi-standalone-service` (Arch package) launches
    Kodi as user `kodi` against `/dev/dri/card0` via gbm/EGL/KMS, on
@@ -472,10 +471,12 @@ behaviour; the custom pieces are noted.
 
 ### Custom code summary
 
-Everything custom lives in (a) the initrd (mount + version-pick +
-experiment-snapshot setup) and (b) a handful of `.mount` units shipped
-in the image, plus (c) a small `theatre-os update` wrapper. No
-overlayfs, no exotic machinery; total LoC expected to be small.
+Initrd: data-partition mount + version-resolution + pending-restore
+swap. Image: a handful of bind-mount `.mount` units, a small
+`theatre-os` CLI (subcommands: `update`, `experiment`,
+`experiment-off`, `snapshot`, `restore`, …), the moonlight launcher
+script. No overlayfs, no exotic machinery; total LoC expected to be
+small.
 
 ## Kodi & moonlight session
 
@@ -701,6 +702,7 @@ the same `@v` so sysupdate treats them as one update transaction:
 Type=url-tar
 Path=https://static.apps.lasath.com/sysupdate/theatre-t480/
 MatchPattern=theatre-os_@v.tar.xz
+Verify=no
 
 [Target]
 Type=subvolume
@@ -716,6 +718,7 @@ InstancesMax=10
 Type=url-file
 Path=https://static.apps.lasath.com/sysupdate/theatre-t480/
 MatchPattern=theatre-os_@v.efi
+Verify=no
 
 [Target]
 Type=regular-file
@@ -727,16 +730,18 @@ InstancesMax=10
 The path namespaces by host (`theatre-t480/`) even though there's only
 one box; cheap insurance in case we ever want a second target later.
 
-`Verify=` is left at the default (`signature`); we override per-source
-to use SHA256SUMS-only since we're not signing (see Architecture →
-Distribution).
+`Verify=` defaults to `yes` (require GPG-signed `SHA256SUMS.gpg`).
+We set `Verify=no` per source: SHA256 hashes from `SHA256SUMS` are
+still checked unconditionally against the downloaded payload (per
+`sysupdate.d(5)`), so transport corruption is caught; only the GPG
+signature step is skipped — see Architecture → Distribution.
 
 ### CI later (not now)
 
-A GitHub Action could run `build.sh && publish.sh` on push to `main`.
-Needs a self-hosted runner (mkosi requires root + chroots; public
-runners don't comfortably do this). Skip until iterating manually
-becomes annoying.
+A GitHub Action could run `mkosi build && ./scripts/publish.sh` on
+push to `main`. Needs a self-hosted runner (mkosi requires root +
+chroots; public runners don't comfortably do this). Skip until
+iterating manually becomes annoying.
 
 ## Initial install / disk provisioning
 

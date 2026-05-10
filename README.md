@@ -8,7 +8,7 @@ moonlight-qt launches from within Kodi for game streaming.
 
 - **Build**: [`mkosi`](https://mkosi.systemd.io/) produces an Arch-based
   root tree from declarative config in this repo. Build output per
-  release: `theatre-os_<v>.tar.xz` (root tree) + `theatre-os_<v>.efi`
+  release: `theatre-os_<v>.tar` (root tree) + `theatre-os_<v>.efi`
   (matching UKI) + `SHA256SUMS`.
 - **Distribution**: uploaded via WebDAV PUT to the homelab dufs
   instance at `push.apps.lasath.com/theatre-t480/`, served read-only
@@ -19,7 +19,7 @@ moonlight-qt launches from within Kodi for game streaming.
   threat. (Adding signing later is a non-breaking change if needed.)
 - **Deploy**: [`systemd-sysupdate`](https://www.freedesktop.org/software/systemd/man/latest/systemd-sysupdate.html)
   on the HTPC pulls each release over HTTPS. The transfer manifest has
-  two entries: the `.tar.xz` is extracted (`Type=url-tar`) into a fresh
+  two entries: the `.tar` is extracted (`Type=url-tar`) into a fresh
   btrfs subvolume on the rootfs partition (`Type=subvolume`); the `.efi`
   UKI is dropped into `/efi/EFI/Linux/` (`Type=regular-file`).
   systemd-boot enumerates UKIs → boot menu shows every installed
@@ -106,7 +106,9 @@ dock/USB-NIC specific to the ZBook and don't necessarily apply.
 2. `theatre-os experiment` to enter experiment mode live (no reboot;
    btrfs swap-snapshot trick). Now `pacman -S` / `/etc` edits work
    and land in throwaway subvols.
-3. `theatre-os experiment-off` (or reboot) → experimental writes vanish.
+3. Reboot to leave experiment mode → all experimental writes vanish
+   (next boot mounts the fresh `@os/<v>` and `@persist/<v>` snapshots
+   we created when entering experiment mode).
 4. Promote working changes into the mkosi config in this repo
    (`mkosi.conf`, `mkosi.extra/`, `mkosi.images/`, etc.).
 5. `mkosi build` → `./scripts/publish.sh` → `theatre-os update` on
@@ -158,7 +160,7 @@ Image version = build datetime, UTC, minute resolution: `2026-05-09-1422`.
   because SHAs don't sort meaningfully.
 
 Artifacts use the version as their stem:
-`theatre-os_2026-05-09-1422.tar.xz`, `theatre-os_2026-05-09-1422.efi`.
+`theatre-os_2026-05-09-1422.tar`, `theatre-os_2026-05-09-1422.efi`.
 
 ## Partition layout
 
@@ -297,13 +299,12 @@ The `theatre-os` CLI is the single entry point for all of this:
 | Command | What it does |
 |---|---|
 | `theatre-os update` | Pull the next release: invoke sysupdate, snapshot persist, paired GC. Refuses if in experiment mode. |
-| `theatre-os experiment` | Enter experiment mode live (no reboot): swap-snapshot `@os/<v>` and `@persist/<v>`, flip `/` to RW. |
-| `theatre-os experiment-off` | Reverse the swap, drop the throwaway, remount RO. Live, no reboot. |
+| `theatre-os experiment` | Enter experiment mode live (no reboot): swap-snapshot `@os/<v>` and `@persist/<v>`, flip `/` to RW. Reboot to leave. |
 | `theatre-os snapshot [name]` | Manually snapshot persist for a checkpoint before risky persist mutations. |
 | `theatre-os snapshot list` | Show manual snapshots. |
 | `theatre-os snapshot delete <id>` | Drop a manual snapshot. |
 | `theatre-os snapshot prune` | Drop snapshots older than 30 days, with confirm. |
-| `theatre-os restore <id>` | Mark a snapshot for restoration on next boot (initrd performs the swap). |
+| `theatre-os restore <id>` | Stage a snapshot to be the active persist after the next boot (live swap, same trick as experiment mode; reboot to apply). |
 
 Details for each in the subsections below.
 
@@ -345,8 +346,13 @@ holds open). The freshly-snapshotted originals sit on disk untouched
 until the next boot, which mounts them and resumes normal mode.
 
 A motd / journal banner advertises experiment mode to anyone who
-SSHes in. `theatre-os experiment-off` reverses the swap (rename back,
-drop the throwaway, remount RO) — also live, no reboot.
+SSHes in. To leave experiment mode, **reboot**. The next boot mounts
+the fresh `@os/<v>` and `@persist/<v>` snapshots we created at
+experiment-on time and resumes normal mode; the `-experiment-<unique>`
+subvols stay around for forensic browsing (last N kept). We don't
+ship a live `experiment-off` because the reverse-swap logic would be
+fragile (open files, RW→RO remount, name conflicts) for marginal
+benefit over a 30-second reboot.
 
 If you want to keep something from an experiment: edit the mkosi
 config in this repo and ship a new image. Same discipline as the
@@ -357,9 +363,6 @@ on a btrfs subvol whose `ro` property was just flipped is the part we
 want to verify works cleanly across the kernel versions we'll target.
 The mechanism is sound in principle; in practice there may be edge
 cases (the kernel may cache RO state somewhere we need to nudge).
-
-Old experiment subvols are retained for forensic browsing (last N
-kept, older GC'd).
 
 ### `theatre-os update`
 
@@ -424,21 +427,26 @@ theatre-os snapshot prune
   Drops manual snapshots older than 30 days, with confirm.
 
 theatre-os restore <name-or-timestamp>
-  Marks the chosen snapshot for restoration on next boot. Reboot to
-  apply.
+  Live-swap the chosen snapshot into place as the next boot's persist.
+  Reboot to actually use it.
 ```
 
-Restore is **not live** — too fragile to swap out a mounted persist
-subvol while userspace is using files. Instead, the `restore` command
-writes a small marker (e.g. `/efi/theatreos/pending-restore`) that the
-initrd checks before mounting persist:
+Restore uses the **same btrfs swap-snapshot trick as experiment mode**
+— mounts are inode-tracked, renaming a subvol doesn't disturb the
+live mount. From the running system:
 
-1. Read marker.
-2. Rename current `@persist/<v>` → `@persist/<v>-pre-restore-<ts>`
-   (kept around as an undo of the undo).
-3. Snapshot the chosen `@persist/<v>-snap-<id>` → fresh `@persist/<v>`.
-4. Delete marker.
-5. Proceed with normal mount.
+1. Rename current `@persist/<v>` → `@persist/<v>-pre-restore-<ts>`
+   (the live mount keeps using it under the new name).
+2. Snapshot the chosen `@persist/<v>-snap-<id>` → fresh `@persist/<v>`
+   (RW, sitting on disk, unmounted).
+3. Reboot. Initrd mounts the fresh `@persist/<v>` and you're on the
+   restored state. The renamed `@persist/<v>-pre-restore-<ts>` stays
+   around as an undo-of-the-undo.
+
+Caveat: between running `theatre-os restore` and rebooting, the live
+system is still on the old (renamed) persist. Writes during that
+window land in `-pre-restore-<ts>` and won't appear on the restored
+state. The CLI prompts to reboot immediately to avoid this.
 
 CoW makes snapshots cheap on disk — slow-changing state like Kodi's
 persists very little delta per snapshot. Take them liberally.
@@ -473,10 +481,8 @@ behaviour; the custom pieces are noted.
 
 4. **Resolve which subvolumes to mount.** Read the version from
    `/usr/lib/os-release`. Target subvols are `@os/<v>` and
-   `@persist/<v>`. Both pre-existing (created at install time of `<v>`).
-   - Pending restore: if `/efi/theatreos/pending-restore` exists, the
-     `theatre-os restore` swap is performed before mounting (see
-     "Manual persist snapshots").
+   `@persist/<v>`. Both pre-existing (created at install time of `<v>`,
+   or possibly swapped in by a recent `theatre-os restore`).
 
 5. **Mount root and persist.** Mount `@os/<v>` RO as `/sysroot`. Mount
    `@persist/<v>` at `/sysroot/system/persist`. Bind-mount
@@ -510,12 +516,11 @@ behaviour; the custom pieces are noted.
 
 ### Custom code summary
 
-Initrd: data-partition mount + version-resolution + pending-restore
-swap. Image: a handful of bind-mount `.mount` units, a small
-`theatre-os` CLI (subcommands: `update`, `experiment`,
-`experiment-off`, `snapshot`, `restore`, …), the moonlight launcher
-script. No overlayfs, no exotic machinery; total LoC expected to be
-small.
+Initrd: data-partition mount + version-resolution. Image: a handful
+of bind-mount `.mount` units, a small `theatre-os` CLI (subcommands:
+`update`, `experiment`, `snapshot`, `restore`, …), the moonlight
+launcher script. No overlayfs, no exotic machinery; total LoC
+expected to be small.
 
 ## Kodi & moonlight session
 
@@ -641,13 +646,13 @@ executable `mkosi.version` are the only repo-side glue.
 
 ### What mkosi produces for us
 
-With `Format=tar`, `CompressOutput=xz`, `SplitArtifacts=uki`,
-`Checksum=yes`, and `ImageVersion=` set from `mkosi.version`, one
-`mkosi build` invocation produces:
+With `Format=tar`, `SplitArtifacts=uki`, `Checksum=yes`, and
+`ImageVersion=` set from `mkosi.version`, one `mkosi build`
+invocation produces:
 
 ```
 mkosi.output/
-  theatre-os_<v>.tar.xz       # rootfs (sysupdate Type=url-tar input)
+  theatre-os_<v>.tar       # rootfs (sysupdate Type=url-tar input)
   theatre-os_<v>.efi          # UKI (sysupdate Type=url-file input)
   theatre-os_<v>.SHA256SUMS   # checksums covering both
 ```
@@ -661,6 +666,13 @@ Notably we **do not** need to:
   *and* the initrd's `/usr/lib/os-release`).
 
 mkosi and sysupdate are designed to compose; we lean on that.
+
+The rootfs tar is uncompressed. It's a few-hundred-MB tree on a gigabit
+LAN — wire time is seconds either way. If wire becomes an issue later,
+enable HTTP-level gzip on the dufs/static server (transparent to
+sysupdate, no artefact rename needed). Skipping artefact-level
+compression means: faster mkosi builds, faster install-time decompress,
+and we can change transport compression without touching this repo.
 
 ### Version stamping
 
@@ -742,7 +754,7 @@ the same `@v` so sysupdate treats them as one update transaction:
 [Source]
 Type=url-tar
 Path=https://static.apps.lasath.com/sysupdate/theatre-t480/
-MatchPattern=theatre-os_@v.tar.xz
+MatchPattern=theatre-os_@v.tar
 Verify=no
 
 [Target]
@@ -837,7 +849,7 @@ mkosi.images/
 or `--image=installer build` builds just one. By default mkosi names
 subimage outputs after the subimage rather than the top-level
 `ImageId`, so we set `Output=theatre-os` in each subimage's mkosi.conf
-to keep names consistent: `theatre-os_<v>.tar.xz`,
+to keep names consistent: `theatre-os_<v>.tar`,
 `theatre-os_<v>.efi`, `theatre-os_<v>.raw.xz`. (The release and
 installer outputs distinguish themselves by extension.)
 

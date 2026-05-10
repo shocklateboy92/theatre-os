@@ -959,11 +959,20 @@ isn't precious by design.)
 publish → Local testing.)
 
 1. mkosi: minimal bootable Arch image (release subimage only).
-2. Add `theatreos-data` btrfs layout (`@os/<v>` + `@persist/<v>`) +
-   initrd mount logic.
-3. Add systemd-sysupdate + `theatre-os update` wrapper.
-4. Add installer subimage (Format=disk + repart subvols); verify
-   first-boot grow with `mkosi --image=installer vm`.
+2. Add installer subimage (Format=disk + repart subvols building the
+   `theatreos-data` btrfs layout with `@os/<v>` + `@persist/<v>` +
+   `@persist/seed`). Disk builds but doesn't boot yet — no mount
+   logic. This step exists ahead of phases 3-4 so the rest of the
+   work has a real `mkosi vm` test loop instead of a hand-rolled
+   fake disk.
+3. Add initrd mount logic (systemd generator that reads `VERSION_ID`
+   from the UKI's `/usr/lib/os-release`, mounts `@os/<v>` RO at `/`
+   and `@persist/<v>` at `/system/persist`, plus the bind-mounts).
+   Disk from step 2 now boots end-to-end in `mkosi vm`. Verify
+   first-boot grow at the same time.
+4. Add systemd-sysupdate + `theatre-os update` wrapper. Test by
+   `mkosi serve`-ing a second build and running an update inside
+   the VM from step 3.
 5. Port LibreELEC tweaks (BT/WOL/power-key/wake-chime) → systemd units
    in image.
 6. Bring up on T480 via AMT KVM + `dd` of installer image. Stage at

@@ -258,7 +258,8 @@ write somewhere we didn't predict.
 
 Other persist mounts (specific paths outside `/var`):
 
-- `/home/kodi/.kodi/` — Kodi userdata, addons, watch state
+- `/home/kodi/` — entire kodi user home (Kodi userdata in `.kodi/`,
+  moonlight-qt pairing/config in `.config/`, anything else app-specific)
 - `/etc/machine-id` — generated on first boot, then stable
 - `/etc/ssh/ssh_host_*` — generated on first boot, then stable
 - (more added during phase 4)
@@ -286,7 +287,8 @@ unbounded.
   general-purpose desktop where users edit configs by hand; we're a
   sealed appliance and the forced-forgetting is the whole point of the
   iteration loop.
-- `/usr/`, `/opt/`, installed packages — RO subvolume.
+- `/usr/`, `/opt/`, installed packages — part of the RO `@os/<v>`
+  rootfs subvolume; not separate subvols.
 - `/run`, `/tmp`, `/dev/shm` — standard tmpfs (systemd-managed).
 
 ## Updates & experiment mode
@@ -471,8 +473,11 @@ behaviour; the custom pieces are noted.
    initrd; the matching version is stamped into the initrd's
    `/usr/lib/os-release`. *Free.*
 
-2. **Kernel → initrd.** Standard mkosi-built initrd: drivers, udev,
-   systemd in initrd context. *Free.*
+2. **Kernel → initrd.** Standard mkosi-built initrd with **systemd
+   as PID 1** (not dracut) — same systemd as the real root, so any
+   `.mount`/`.service`/`.target` units we ship in
+   `mkosi.extra/usr/lib/systemd/system/` work identically in initrd
+   and real-root contexts. Generators run too. *Free.*
 
 3. **Mount the data partition.** Initrd finds `/dev/disk/by-label/theatreos-data`
    via udev and mounts the btrfs root at `/sysroot/system/data` (which
@@ -487,7 +492,7 @@ behaviour; the custom pieces are noted.
 5. **Mount root and persist.** Mount `@os/<v>` RO as `/sysroot`. Mount
    `@persist/<v>` at `/sysroot/system/persist`. Bind-mount
    `/sysroot/var` from `/sysroot/system/persist/var`,
-   `/sysroot/home/kodi/.kodi` from `/sysroot/system/persist/home/kodi/.kodi`,
+   `/sysroot/home/kodi` from `/sysroot/system/persist/home/kodi`,
    `/sysroot/etc/machine-id` from `/sysroot/system/persist/etc/machine-id`,
    `/sysroot/etc/ssh/` from `/sysroot/system/persist/etc/ssh/`. *Custom*
    `.mount` units shipped in the image; mkosi config pre-creates the
@@ -505,14 +510,13 @@ behaviour; the custom pieces are noted.
 
 8. **Normal systemd boot.** networkd, sshd, bluetoothd, etc. *Free.*
 
-9. **Kodi starts.** `kodi-standalone-service` (Arch package) launches
-   Kodi as user `kodi` against `/dev/dri/card0` via gbm/EGL/KMS, on
-   tty1. The image masks `getty@tty1.service` (a `/dev/null` symlink
-   in `/etc/systemd/system/`, shipped via `mkosi.extra/`) so systemd's
-   default getty doesn't fight Kodi for the tty — same approach
-   display managers like sddm use, just baked statically since we
-   never want getty on tty1. Other ttys still get gettys for emergency
-   console access via AMT KVM. See "Kodi & moonlight session" below.
+9. **Kodi starts.** `kodi-gbm.service` (from Arch's
+   `kodi-standalone-service` package) launches Kodi as user `kodi`
+   against `/dev/dri/card0` via gbm/EGL/KMS, on tty1. The unit ships
+   with `Conflicts=getty@tty1.service` upstream, so systemd
+   automatically stops the getty when Kodi starts (same pattern sddm
+   uses). Other ttys still get gettys for emergency console access via
+   AMT KVM. See "Kodi & moonlight session" below.
 
 ### Custom code summary
 
@@ -593,13 +597,15 @@ we'd add PipeWire alongside but Kodi/moonlight would still bypass it.
 ### Userdata: addons, skin, keymaps, settings
 
 theatre-os ships **no** Kodi customisations. The OS provides Arch's
-`kodi-standalone-service` package and a writable `/home/kodi/.kodi/`
+`kodi-standalone-service` package and a writable `/home/kodi/`
 mountpoint (bind-mounted from `@persist/<v>`); everything inside that
-directory — addons (`service.avr.volume`, `script.theatre.lights.toggle`,
-`plugin.video.watchlist`, `context.go.to.show`, HAKA, etc.), the
-Arctic Zephyr modded skin, keymaps, library, watch state, the Kodi
-instance UUID — is owned by `ha-config/kodi/` and pushed to the box
-by `ha-config/kodi/deploy.sh`.
+home — Kodi userdata in `.kodi/` (addons like `service.avr.volume`,
+`script.theatre.lights.toggle`, `plugin.video.watchlist`,
+`context.go.to.show`, HAKA, etc., the Arctic Zephyr modded skin,
+keymaps, library, watch state, the Kodi instance UUID), moonlight-qt
+pairing/config in `.config/`, anything else app-specific — is owned
+by `ha-config/kodi/` and pushed to the box by
+`ha-config/kodi/deploy.sh`.
 
 This is a deliberate split:
 
@@ -890,7 +896,8 @@ files in git.)
 
 The `seed-skeleton` is a tiny tree of empty mountpoints — empty
 `/etc/machine-id`, empty `/etc/ssh/`, empty `/var/log/`, empty
-`/home/kodi/.kodi/`, and any other persist bind targets. It exists
+`/home/kodi/` (owned by the kodi user), and any other persist bind
+targets. It exists
 solely so the bind-mounts in the boot sequence have somewhere to land
 on the very first boot. systemd-firstboot + sshd-keygen populate the
 identity files on first boot; Kodi populates `/home/kodi/.kodi` on

@@ -714,6 +714,15 @@ That's the build. mkosi handles tar, UKI splitting, compression,
 SHA256SUMS, version stamping. `mkosi.output/` is cleaned on each
 build, so it always contains exactly one version's artefacts.
 
+### Local testing
+
+`mkosi vm` boots the just-built image in qemu (KVM-accelerated where
+available) — same image bytes, real systemd, real boot path. `mkosi ssh`
+connects in. For the installer subimage, `mkosi --image=installer vm`
+runs the disk image (simulating the post-`dd` first boot including
+`systemd-repart` partition grow). This is the primary test harness for
+everything that doesn't need real GPU/audio/BT/AMT.
+
 ### `scripts/publish.sh`
 
 Discovers the version from the local SHA256SUMS file (mkosi just wrote
@@ -946,14 +955,17 @@ isn't precious by design.)
 
 ## Phased plan
 
-1. mkosi: minimal bootable Arch image in a VM (release subimage only)
+(Phases 1-4 are validated locally with `mkosi vm` — see Build &
+publish → Local testing.)
+
+1. mkosi: minimal bootable Arch image (release subimage only).
 2. Add `theatreos-data` btrfs layout (`@os/<v>` + `@persist/<v>`) +
-   initrd mount logic in VM
-3. Add systemd-sysupdate + `theatre-os update` wrapper in VM
-4. Add installer subimage (Format=disk + repart subvols) + verify
-   first-boot grow in VM
+   initrd mount logic.
+3. Add systemd-sysupdate + `theatre-os update` wrapper.
+4. Add installer subimage (Format=disk + repart subvols); verify
+   first-boot grow with `mkosi --image=installer vm`.
 5. Port LibreELEC tweaks (BT/WOL/power-key/wake-chime) → systemd units
-   in image
+   in image.
 6. Bring up on T480 via AMT KVM + `dd` of installer image. Stage at
    `theatre-t480.home.lasath.com`, ZBook stays prod at `theatre`.
 7. Daily-drive on T480 in parallel with ZBook for 2 weeks; iterate.

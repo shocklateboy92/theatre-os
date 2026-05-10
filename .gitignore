@@ -1,0 +1,2 @@
+# Per-directory .gitignore files in mkosi.{output,cache,pkgcache,builddir}/
+# handle the "exist in repo, contents ignored" pattern.

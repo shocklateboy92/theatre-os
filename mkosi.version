@@ -1,0 +1,5 @@
+#!/bin/sh
+# Image version = build datetime, UTC, minute resolution. Sorts
+# lexicographically (sysupdate's @v matching is string-based), so
+# newest builds always win. See README → Versioning.
+exec date -u +%Y-%m-%d-%H%M

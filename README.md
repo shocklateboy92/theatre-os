@@ -180,8 +180,7 @@ The btrfs partition holds **both** OS and persist subvolumes:
 ├── @os/2026-05-10-0901                       (RO subvols, written by sysupdate Type=subvolume)
 ├── @persist/2026-05-09-1422
 ├── @persist/2026-05-09-1530
-├── @persist/2026-05-10-0901                  (RW subvols, one per OS version, CoW-shared)
-└── @persist/seed                             (initial empty/baked persist, used on very first boot)
+└── @persist/2026-05-10-0901                  (RW subvols, one per OS version, CoW-shared)
 ```
 
 One btrfs (vs two separate partitions for OS and persist) keeps free
@@ -226,11 +225,19 @@ The data partition holds **one persist subvolume per installed OS
 version** (`@persist/<v>`), alongside the `@os/<v>` rootfs subvolumes.
 
 `@persist/<v>` is **created at install time of `<v>`**, not at first
-boot, by snapshotting `@persist/<currently-running>`. The `theatre-os
-update` wrapper does this as part of the install transaction (see
-"Updates & experiment mode"). On the very first install there's no
-running version to fork from; the installer snapshots a baked-in
-`@persist/seed` (skeleton dirs, empty identity files).
+boot. On a fresh install, the installer's `systemd-repart` config
+creates `@persist/<v>` directly and populates it from a checked-in
+skeleton tree (empty identity files, bind-target stubs). On
+**update** from a running version `<r>` to a new `<n>`, the
+`theatre-os update` wrapper snapshots `@persist/<r>` → `@persist/<n>`
+as part of the install transaction (see "Updates & experiment mode").
+
+There is no separate seed subvolume on disk. The skeleton tree lives
+in the repo (`mkosi.images/installer/seed-skeleton/`) and
+is only used at install time, never at runtime — mkosi already knows
+the version it's installing, so repart can name the subvolume
+`@persist/<v>` directly. Subsequent updates fork from the running
+persist, not the skeleton.
 
 Booting `<v>` is therefore a dumb mount: `@persist/<v>` always already
 exists. The version stamped into the booted UKI's `/usr/lib/os-release`
@@ -501,8 +508,9 @@ behaviour; the custom pieces are noted.
 
 6. **switch-root** into `/sysroot`.
 
-7. **First-boot identity generation.** On a fresh install, the seeded
-   persist has empty `/etc/machine-id` and no `/etc/ssh/ssh_host_*`.
+7. **First-boot identity generation.** On a fresh install,
+   `@persist/<v>` was populated from the skeleton tree and so has
+   an empty `/etc/machine-id` and no `/etc/ssh/ssh_host_*`.
    `systemd-firstboot` generates the machine-id; sshd's keygen unit
    generates host keys. Both write to bind-mounted persist paths and
    stick across reboots and OS rollbacks. *Free* (stock systemd) — we
@@ -853,8 +861,12 @@ mkosi.images/
   installer/
     mkosi.conf                        # Format=disk, Bootable=yes,
                                       # Output=theatre-os
-    mkosi.extra/seed-skeleton/        # checked-in empty dirs/files for
-                                      #   the initial @persist/seed
+    seed-skeleton/                    # build-time-only input to repart;
+                                      #   contents copied into @persist/<v>
+                                      #   inside the .raw at build time.
+                                      #   NOT mkosi.extra/ (would also
+                                      #   land in the rootfs, which we
+                                      #   don't want).
     mkosi.repart/
       00-esp.conf
       10-data.conf
@@ -886,10 +898,9 @@ SizeMaxBytes=2G
 Type=linux-generic
 Label=theatreos-data
 Format=btrfs
-Subvolumes=/@os/<v>:ro /@persist/seed /@persist/<v>
+Subvolumes=/@os/<v>:ro /@persist/<v>
 DefaultSubvolume=/@os/<v>
 CopyFiles=<rootfs>:/@os/<v>
-CopyFiles=<seed-skeleton>:/@persist/seed
 CopyFiles=<seed-skeleton>:/@persist/<v>
 SizeMinBytes=4G
 GrowFileSystem=yes
@@ -899,23 +910,22 @@ GrowFileSystem=yes
 ImageVersion. `<rootfs>` is the rootfs subimage's output, available
 to the installer subimage's repart via mkosi's build dependency
 mechanism. `<seed-skeleton>` is a directory checked into this repo at
-`mkosi.images/installer/mkosi.extra/seed-skeleton/` containing the
+`mkosi.images/installer/seed-skeleton/` containing the
 empty identity files and bind-target stubs verbatim — no script, just
 files in git.)
 
 The `seed-skeleton` is a tiny tree of empty mountpoints — empty
 `/etc/machine-id`, empty `/etc/ssh/`, empty `/var/log/`, empty
 `/home/kodi/` (owned by the kodi user), and any other persist bind
-targets. It exists
-solely so the bind-mounts in the boot sequence have somewhere to land
-on the very first boot. systemd-firstboot + sshd-keygen populate the
-identity files on first boot; Kodi populates `/home/kodi/.kodi` on
-first launch; etc.
+targets. It exists solely so the bind-mounts in the boot sequence
+have somewhere to land on the very first boot. systemd-firstboot +
+sshd-keygen populate the identity files on first boot; Kodi
+populates `/home/kodi/.kodi` on first launch; etc.
 
-For initial install, `@persist/seed` and `@persist/<v>` start
-identical. Subsequent updates fork new `@persist/<v>` from the
-running version's persist (per `theatre-os update`), not from seed.
-Seed is only used once, at very-first-boot, ever.
+The skeleton is only consumed at install time. On update, the new
+persist subvolume is snapshotted from the running version's persist,
+which already has whatever first-boot identity files were generated
+on the previous install — the skeleton is never read again.
 
 ### First-boot grow
 
@@ -960,11 +970,10 @@ publish → Local testing.)
 
 1. mkosi: minimal bootable Arch image (release subimage only).
 2. Add installer subimage (Format=disk + repart subvols building the
-   `theatreos-data` btrfs layout with `@os/<v>` + `@persist/<v>` +
-   `@persist/seed`). Disk builds but doesn't boot yet — no mount
-   logic. This step exists ahead of phases 3-4 so the rest of the
-   work has a real `mkosi vm` test loop instead of a hand-rolled
-   fake disk.
+   `theatreos-data` btrfs layout with `@os/<v>` + `@persist/<v>`).
+   Disk builds but doesn't boot yet — no mount logic. This step
+   exists ahead of phases 3-4 so the rest of the work has a real
+   `mkosi vm` test loop instead of a hand-rolled fake disk.
 3. Add initrd mount logic (systemd generator that reads `VERSION_ID`
    from the UKI's `/usr/lib/os-release`, mounts `@os/<v>` RO at `/`
    and `@persist/<v>` at `/system/persist`, plus the bind-mounts).

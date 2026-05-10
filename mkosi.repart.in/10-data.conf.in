@@ -1,0 +1,44 @@
+# Data partition: holds @os/<v> (RO rootfs subvols) and @persist/<v>
+# (RW per-version persist subvols). See README → Partition layout +
+# Persistence model.
+#
+# This file is a TEMPLATE: scripts/build.sh substitutes @VERSION@ with
+# the current build's version (from ./mkosi.version) before invoking
+# mkosi. Templating is needed because systemd-repart's Subvolumes=
+# directive doesn't expand specifiers (and Subvolumes= is the only
+# setting in this file that needs the version baked in). See README
+# → Build & publish for context.
+
+[Partition]
+Type=linux-generic
+Label=theatreos-data
+Format=btrfs
+# Container directories for the versioned subvolumes. These are
+# plain dirs, not subvolumes themselves — they exist solely to be
+# the parent path under which sysupdate creates @os/<v> children
+# via Type=subvolume. Subvolumes= does not create parent
+# directories on its own (see repart.d(5)), hence MakeDirectories=.
+MakeDirectories=/@os /@persist
+Subvolumes=/@os/@VERSION@:ro /@persist/@VERSION@
+DefaultSubvolume=/@os/@VERSION@
+
+# Populate @os/<v> with the rootfs being built. CopyFiles auto-creates
+# parent dirs (so /@os/ and /@os/<v>/ exist before mkfs.btrfs converts
+# them to subvolumes per the Subvolumes= line above).
+CopyFiles=/:/@os/@VERSION@
+
+# @persist/@VERSION@ is created empty by Subvolumes= above, BUT
+# mkfs.btrfs's --subvol requires the directory to exist before it
+# can be converted to a subvolume. CopyFiles= covers that for the
+# /@os/ tree; for /@persist/ we have no files to copy (the persist
+# subvol starts empty), so explicitly pre-create the dirs.
+MakeDirectories=/@persist /@persist/@VERSION@
+
+# Specific paths needed for bind mounts (/var/log, /home/kodi,
+# /etc/ssh, /etc/machine-id, …) inside @persist/<v> are created by
+# systemd-tmpfiles on first boot (phase 3).
+
+# Keep the partition compact in the .raw artefact; first-boot
+# systemd-repart on the target grows it to fill the actual disk.
+SizeMinBytes=4G
+GrowFileSystem=yes

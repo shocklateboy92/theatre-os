@@ -111,7 +111,7 @@ dock/USB-NIC specific to the ZBook and don't necessarily apply.
    we created when entering experiment mode).
 4. Promote working changes into the mkosi config in this repo
    (`mkosi.conf`, `mkosi.extra/`, `mkosi.images/`, etc.).
-5. `mkosi build` → `./scripts/publish.sh` → `theatre-os update` on
+5. `./build.sh` → `./publish.sh` → `theatre-os update` on
    the box, reboot.
 6. Verify; if broken, reboot and pick the previous UKI from the
    systemd-boot menu (or recover via AMT KVM if unbootable).
@@ -232,12 +232,11 @@ skeleton tree (empty identity files, bind-target stubs). On
 `theatre-os update` wrapper snapshots `@persist/<r>` → `@persist/<n>`
 as part of the install transaction (see "Updates & experiment mode").
 
-There is no separate seed subvolume on disk. The skeleton tree lives
-in the repo (`mkosi.images/installer/seed-skeleton/`) and
-is only used at install time, never at runtime — mkosi already knows
-the version it's installing, so repart can name the subvolume
-`@persist/<v>` directly. Subsequent updates fork from the running
-persist, not the skeleton.
+There is no separate seed subvolume on disk and no skeleton tree
+in the repo. The bind-mount target dirs needed inside `@persist/<v>`
+(`/var/log/`, `/etc/ssh/`, etc.) are created on first boot by a
+`tmpfiles.d` snippet shipped in the rootfs. Subsequent updates fork
+from the running persist, never from a skeleton.
 
 Booting `<v>` is therefore a dumb mount: `@persist/<v>` always already
 exists. The version stamped into the booted UKI's `/usr/lib/os-release`
@@ -660,19 +659,28 @@ executable `mkosi.version` are the only repo-side glue.
 
 ### What mkosi produces for us
 
-With `Format=tar`, `SplitArtifacts=uki`, `Checksum=yes`, and
-`ImageVersion=` set from `mkosi.version`, one `mkosi build`
-invocation produces:
+A single `Format=disk` build with `SplitArtifacts=uki,tar`,
+`Checksum=yes`, and `ImageVersion=` set from `mkosi.version`
+produces all three artefacts the rest of the system needs in one go:
 
 ```
 mkosi.output/
-  theatre-os_<v>.tar       # rootfs (sysupdate Type=url-tar input)
+  theatre-os_<v>.raw          # bootable disk image (`dd` install media)
+  theatre-os_<v>.tar          # rootfs (sysupdate Type=url-tar input)
   theatre-os_<v>.efi          # UKI (sysupdate Type=url-file input)
-  theatre-os_<v>.SHA256SUMS   # checksums covering both
+  theatre-os_<v>.SHA256SUMS   # checksums covering all three
 ```
 
+The `.tar` and `.efi` are split out of the disk build (rather than
+built separately) so the rootfs is composed exactly once. The `.raw`
+is used for fresh installs (`dd` to the target disk); the `.tar`
+and `.efi` are what `theatre-os update` pulls down on already-
+installed boxes via sysupdate. See "Initial install / disk
+provisioning" for how the `.raw` gets onto a fresh box and
+"Updates & experiment mode" for the upgrade flow.
+
 Notably we **do not** need to:
-- Tar the rootfs ourselves (`Format=tar`).
+- Tar the rootfs ourselves (`SplitArtifacts=tar`).
 - Run `ukify` separately (`Bootloader=systemd-boot` + `SplitArtifacts=uki`).
 - Hash the artefacts (`Checksum=yes`).
 - Stamp the version into multiple places (`ImageVersion=` flows into
@@ -715,23 +723,34 @@ initrd image; the initrd reads it from there to pick `@os/<v>` /
 ### Building
 
 ```
-mkosi build
+./build.sh           # build (default verb)
+./build.sh -f vm     # rebuild and boot in qemu
+./build.sh shell     # nspawn into the rootfs without booting
 ```
 
-That's the build. mkosi handles tar, UKI splitting, compression,
-SHA256SUMS, version stamping. `mkosi.output/` is cleaned on each
-build, so it always contains exactly one version's artefacts.
+The wrapper exists because systemd-repart's `Subvolumes=` directive
+doesn't accept specifiers, and we need the build's version stamp
+baked into a subvolume name (`@os/<v>`). `build.sh` runs
+the templating step (rendering `mkosi.repart.in/*.in` →
+`mkosi.repart/*` with `@VERSION@` substituted) and then exec's
+`sudo mkosi <args>`. **Always invoke via `build.sh`, never
+`sudo mkosi` directly** — running mkosi without the templating
+step uses stale repart configs from the last build.
+
+mkosi handles UKI splitting, SHA256SUMS, version stamping, all
+internally. `mkosi.output/` accumulates artefacts across builds;
+older versions stick around until manually deleted (we may add a
+prune step later if it becomes annoying).
 
 ### Local testing
 
-`mkosi vm` boots the just-built image in qemu (KVM-accelerated where
-available) — same image bytes, real systemd, real boot path. `mkosi ssh`
-connects in. For the installer subimage, `mkosi --image=installer vm`
-runs the disk image (simulating the post-`dd` first boot including
-`systemd-repart` partition grow). This is the primary test harness for
-everything that doesn't need real GPU/audio/BT/AMT.
+`./build.sh -f vm` boots the just-built `.raw` in qemu
+(KVM-accelerated where available) — same image bytes, real systemd,
+real boot path. `mkosi ssh` connects in once it's up. This is the
+primary test harness for everything that doesn't need real GPU /
+audio / BT / AMT.
 
-### `scripts/publish.sh`
+### `publish.sh`
 
 Discovers the version from the local SHA256SUMS file (mkosi just wrote
 it; we don't need to ask mkosi.version again). Fetches the existing
@@ -814,7 +833,7 @@ signature step is skipped — see Architecture → Distribution.
 
 ### CI later (not now)
 
-A GitHub Action could run `mkosi build && ./scripts/publish.sh` on
+A GitHub Action could run `./build.sh && ./publish.sh` on
 push to `main`. Needs a self-hosted runner (mkosi requires root +
 chroots; public runners don't comfortably do this). Skip until
 iterating manually becomes annoying.
@@ -824,108 +843,107 @@ iterating manually becomes annoying.
 Bootstrapping a fresh box. Updates assume the GPT layout, ESP, and
 btrfs subvolumes already exist; install creates them from nothing.
 
-### Approach: build a `.raw.xz`, `dd` it to the disk
+### Approach: build a `.raw`, `dd` it to the disk
 
-We build a complete bootable disk image as a **second mkosi
-subimage** (sharing the same base config as the release build), then
-`dd` it onto the target disk via AMT KVM or a USB rescue env. First
+The `theatre-os_<v>.raw` artefact mkosi produces is a complete
+bootable disk image (built as part of the same single-image
+`Format=disk` build that produces the sysupdate `.tar` and `.efi`
+artefacts — see Build & publish). To install on a fresh box, `dd`
+it onto the target disk via AMT KVM or a USB rescue env. First
 boot, systemd-repart grows the data partition to fill the disk;
 otherwise it boots like any other build.
 
 ```
 # on a rescue env with the target disk visible as /dev/nvme0n1
-xzcat theatre-os_<v>.raw.xz | dd of=/dev/nvme0n1 bs=4M status=progress
+dd if=theatre-os_<v>.raw of=/dev/nvme0n1 bs=4M status=progress
 sync
 reboot
 ```
 
-No live installer, no Calamares, no separate provisioning tool.
+No live installer, no Calamares, no separate provisioning tool, no
+separate installer subimage — the same `.raw` we test in `mkosi vm`
+is the install media.
 
 ### Repo layout
 
-mkosi's subimage mechanism: a top-level `mkosi.conf` for shared
-settings, plus `mkosi.images/release/` and `mkosi.images/installer/`
-for per-output overrides.
-
 ```
-mkosi.conf                            # shared base
+mkosi.conf                            # all top-level mkosi config
+                                      #   (Format=disk, package list,
+                                      #   kernel cmdline, etc.)
 mkosi.version                         # executable, prints date stamp
-mkosi.extra/                          # files overlaid onto the image as-is:
-                                      #   custom systemd units (.mount, masks,
-                                      #   sleep.d hooks), the theatre-os CLI,
-                                      #   /root/.ssh/authorized_keys, etc.
-mkosi.images/
-  release/
-    mkosi.conf                        # Format=tar, SplitArtifacts=uki,
-                                      # Output=theatre-os
-  installer/
-    mkosi.conf                        # Format=disk, Bootable=yes,
-                                      # Output=theatre-os
-    seed-skeleton/                    # build-time-only input to repart;
-                                      #   contents copied into @persist/<v>
-                                      #   inside the .raw at build time.
-                                      #   NOT mkosi.extra/ (would also
-                                      #   land in the rootfs, which we
-                                      #   don't want).
-    mkosi.repart/
-      00-esp.conf
-      10-data.conf
+mkosi.extra/                          # files overlaid onto the rootfs:
+                                      #   custom systemd units, the
+                                      #   theatre-os CLI, root SSH
+                                      #   pubkeys, sshd_config, …
+mkosi.repart.in/                      # repart configs, with @VERSION@
+                                      #   placeholders. Source of truth.
+  00-esp.conf
+  10-data.conf.in
+mkosi.repart/                         # generated by build.sh
+                                      #   from mkosi.repart.in/.
+                                      #   Gitignored.
+build.sh                              # build entry point at the repo
+                                      #   root (NOT under scripts/) so
+                                      #   it's hard to miss — runs the
+                                      #   templating step then exec's
+                                      #   sudo mkosi. Always invoke this
+                                      #   instead of mkosi directly.
+publish.sh                            # uploads sysupdate artefacts to
+                                      #   dufs (the .raw stays local)
 ```
 
-`mkosi build` produces both subimages by default; `mkosi --image=release build`
-or `--image=installer build` builds just one. By default mkosi names
-subimage outputs after the subimage rather than the top-level
-`ImageId`, so we set `Output=theatre-os` in each subimage's mkosi.conf
-to keep names consistent: `theatre-os_<v>.tar`,
-`theatre-os_<v>.efi`, `theatre-os_<v>.raw.xz`. (The release and
-installer outputs distinguish themselves by extension.)
+There is no `mkosi.images/` subdirectory. mkosi has a subimage
+mechanism but for our needs (one bootable disk image with a tar +
+UKI split out of it) a single top-level config is simpler and matches
+what particleos does.
 
 ### Installer disk layout (built by repart)
 
-`mkosi.images/installer/mkosi.repart/00-esp.conf`:
+`mkosi.repart.in/00-esp.conf` (static, copied verbatim):
+
 ```
 [Partition]
 Type=esp
 Format=vfat
-CopyFiles=/efi:/
+CopyFiles=/efi:/      # systemd-boot + loader.conf
+CopyFiles=/boot:/     # UKI(s) under EFI/Linux/
 SizeMinBytes=2G
 SizeMaxBytes=2G
 ```
 
-`mkosi.images/installer/mkosi.repart/10-data.conf`:
+`mkosi.repart.in/10-data.conf.in` (templated; `@VERSION@` substituted
+at build time by `build.sh`):
+
 ```
 [Partition]
 Type=linux-generic
 Label=theatreos-data
 Format=btrfs
-Subvolumes=/@os/<v>:ro /@persist/<v>
-DefaultSubvolume=/@os/<v>
-CopyFiles=<rootfs>:/@os/<v>
-CopyFiles=<seed-skeleton>:/@persist/<v>
+MakeDirectories=/@os /@persist
+Subvolumes=/@os/@VERSION@:ro /@persist/@VERSION@
+DefaultSubvolume=/@os/@VERSION@
+CopyFiles=/:/@os/@VERSION@
 SizeMinBytes=4G
 GrowFileSystem=yes
 ```
 
-(Schematic — `<v>` is `&v` in actual config, repart specifier for
-ImageVersion. `<rootfs>` is the rootfs subimage's output, available
-to the installer subimage's repart via mkosi's build dependency
-mechanism. `<seed-skeleton>` is a directory checked into this repo at
-`mkosi.images/installer/seed-skeleton/` containing the
-empty identity files and bind-target stubs verbatim — no script, just
-files in git.)
+`@os` and `@persist` are plain directories acting as containers for
+the versioned subvolumes (so that sysupdate's `Type=subvolume
+Path=/system/data/@os/` can drop `@os/<new-v>` alongside existing
+ones). `MakeDirectories=` creates them; `Subvolumes=` creates the
+versioned children.
 
-The `seed-skeleton` is a tiny tree of empty mountpoints — empty
-`/etc/machine-id`, empty `/etc/ssh/`, empty `/var/log/`, empty
-`/home/kodi/` (owned by the kodi user), and any other persist bind
-targets. It exists solely so the bind-mounts in the boot sequence
-have somewhere to land on the very first boot. systemd-firstboot +
-sshd-keygen populate the identity files on first boot; Kodi
-populates `/home/kodi/.kodi` on first launch; etc.
+`@persist/<v>` is created empty. The directory stubs needed for
+bind-mounts (`/var/log/`, `/etc/ssh/`, `/etc/machine-id`, …) are
+created on first boot by a `tmpfiles.d` snippet shipped in the
+rootfs (phase 3). No seed-skeleton tree in the repo — tmpfiles is
+the canonical mechanism for first-boot directory provisioning, and
+it composes cleanly with the persist bind mounts.
 
-The skeleton is only consumed at install time. On update, the new
-persist subvolume is snapshotted from the running version's persist,
-which already has whatever first-boot identity files were generated
-on the previous install — the skeleton is never read again.
+The version templating exists because systemd-repart's `Subvolumes=`
+doesn't expand specifiers — see `repart.d(5)` SPECIFIERS. mkosi
+itself has `&v` for ImageVersion in its own configs, but doesn't
+preprocess the repart configs it hands to systemd-repart.
 
 ### First-boot grow
 
@@ -968,12 +986,17 @@ isn't precious by design.)
 (Phases 1-4 are validated locally with `mkosi vm` — see Build &
 publish → Local testing.)
 
-1. mkosi: minimal bootable Arch image (release subimage only).
-2. Add installer subimage (Format=disk + repart subvols building the
-   `theatreos-data` btrfs layout with `@os/<v>` + `@persist/<v>`).
-   Disk builds but doesn't boot yet — no mount logic. This step
-   exists ahead of phases 3-4 so the rest of the work has a real
-   `mkosi vm` test loop instead of a hand-rolled fake disk.
+1. mkosi: minimal bootable Arch image (Format=tar, just to verify
+   the build pipeline composes).
+2. **(was 4)** Installer is just `Format=disk` on the top-level
+   `mkosi.conf` with custom `mkosi.repart/` configs building the
+   `theatreos-data` btrfs layout (`@os/<v>` + `@persist/<v>`).
+   Single image build produces the bootable `.raw` *and* the sysupdate
+   `.tar` + `.efi` artefacts via `SplitArtifacts=uki,tar`. Disk builds
+   but doesn't boot to a real shell yet — no mount logic, drops to
+   emergency. This step exists ahead of phase 3 so the rest of the
+   work has a real `mkosi vm` test loop instead of a hand-rolled
+   fake disk.
 3. Add initrd mount logic (systemd generator that reads `VERSION_ID`
    from the UKI's `/usr/lib/os-release`, mounts `@os/<v>` RO at `/`
    and `@persist/<v>` at `/system/persist`, plus the bind-mounts).

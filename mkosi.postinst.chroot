@@ -1,0 +1,19 @@
+#!/bin/sh
+# Runs chrooted into the buildroot after pacman has installed all
+# packages, before mkosi.finalize. mkosi picks this script up
+# automatically by name (the .chroot suffix is the chroot trigger).
+
+set -eu
+
+# Generate en_US.UTF-8. mkosi's Locale=en_US.UTF-8 in mkosi.conf
+# writes /etc/locale.conf, but on Arch glibc still uses the
+# locale-archive model: the locale must also be uncommented in
+# /etc/locale.gen and `locale-gen` run to populate
+# /usr/lib/locale/locale-archive. Without this, LANG=en_US.UTF-8 is
+# set in the environment but glibc silently falls back to the C
+# (ASCII) locale, and any Python code calling
+# locale.getpreferredencoding() (e.g. Kodi's bundled
+# service.xbmc.versioncheck addon, which open()s /etc/os-release
+# with the locale codec) crashes on the first multi-byte character.
+sed -i 's/^#\(en_US\.UTF-8 UTF-8\)/\1/' /etc/locale.gen
+locale-gen

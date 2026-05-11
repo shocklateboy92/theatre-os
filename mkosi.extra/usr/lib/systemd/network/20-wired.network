@@ -1,0 +1,26 @@
+# theatre-os: DHCP all wired ethernet interfaces.
+#
+# Match=Name=en* covers all systemd Predictable Interface Names for
+# ethernet (en*: enp0s31f6, eno1, enx<MAC>, etc.) without us having
+# to know the specific name a given kernel will produce on a given
+# board. Wireless (wl*) is intentionally excluded — theatre-os runs
+# wired-only by design (see README → Hardware).
+#
+# DHCP=yes pulls IP + DNS + default route from the home router. No
+# Wi-Fi setup ever needed; for a wired HTPC permanently plugged into
+# the AVR cabinet's ethernet, this is all the network config we need.
+#
+# Drop-in replaceable: a future host with a more exotic setup (e.g.
+# multiple NICs needing different policies) can ship its own
+# higher-numbered .network file that matches more specifically and
+# wins by lexicographic ordering.
+
+[Match]
+Name=en*
+
+[Network]
+DHCP=yes
+# Multicast DNS — useful so HA's mDNS-based discovery (and `avahi`-
+# style "find the box on the LAN") works without configuring static
+# DNS records. Cost is essentially zero on a small LAN.
+MulticastDNS=yes

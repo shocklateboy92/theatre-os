@@ -28,11 +28,17 @@ Format=btrfs
 #                        drop generated host keys into on first
 #                        boot. The rest of /var inside @persist/<v>
 #                        is populated by CopyFiles= further down.
+#   /@persist/<v>/home/kodi — bind target for /home/kodi (see
+#                        sysroot-home-kodi.mount in the initrd).
+#                        Ownership is set by tmpfiles on every boot
+#                        (kodi:kodi via /usr/lib/tmpfiles.d/kodi.conf),
+#                        so we don't have to worry about repart
+#                        creating it as root:root.
 #
 # Repart applies CopyFiles= before MakeDirectories= regardless of
 # declaration order (see repart.d(5)), so MakeDirectories= can
 # safely fill in the gaps.
-MakeDirectories=/@os /@persist /@os/@VERSION@/var /@persist/@VERSION@/var /@persist/@VERSION@/var/lib /@persist/@VERSION@/var/lib/ssh /@persist/@VERSION@/var/lib/theatre-os
+MakeDirectories=/@os /@persist /@os/@VERSION@/var /@persist/@VERSION@/var /@persist/@VERSION@/var/lib /@persist/@VERSION@/var/lib/ssh /@persist/@VERSION@/var/lib/theatre-os /@persist/@VERSION@/home /@persist/@VERSION@/home/kodi
 
 Subvolumes=/@os/@VERSION@:ro /@persist/@VERSION@
 
@@ -70,5 +76,10 @@ CopyFiles=/var:/@persist/@VERSION@/var
 
 # Keep the partition compact in the .raw artefact; first-boot
 # systemd-repart on the target grows it to fill the actual disk.
-SizeMinBytes=4G
+# Bumped from 4G to 8G in phase 5 because Kodi + moonlight-qt + Qt
+# stack pushed the seeded rootfs past the previous 4G ceiling. The
+# .raw is `dd`'d to the target disk once at install; the on-disk
+# size after first boot is whatever the disk holds, so this only
+# affects install media size, not runtime.
+SizeMinBytes=8G
 GrowFileSystem=yes

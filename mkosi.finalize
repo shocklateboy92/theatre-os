@@ -10,4 +10,4 @@
 
 set -eu
 
-mkdir -p "$BUILDROOT/system/data" "$BUILDROOT/system/persist" "$BUILDROOT/efi"
+mkdir -p "$BUILDROOT/system/data" "$BUILDROOT/system/persist" "$BUILDROOT/efi" "$BUILDROOT/home/kodi"

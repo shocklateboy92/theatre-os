@@ -133,10 +133,14 @@ Two accounts exist on the running system:
   path. Rotating the allowed key = edit the file in this repo and
   ship a new image. There is no per-host customisation; one image,
   one key.
-- **`kodi`** — service account created by Arch's `kodi-standalone-service`
-  package. Runs Kodi (and moonlight-qt invoked from it). Member of
-  `audio video input render wheel network`. No login shell, no SSH.
-  Userdata at `/home/kodi/.kodi/` is on the persist subvol.
+- **`kodi`** — service account for the Kodi process. Defined in
+  `mkosi.extra/usr/lib/sysusers.d/kodi.conf` (vendored from the AUR
+  `kodi-standalone-service` package; see Custom code summary). Runs
+  Kodi (and moonlight-qt invoked from it). Member of `audio video
+  input render video_dma optical network`. Pinned to UID/GID **420**
+  for stability across rebuilds. No login shell, no SSH. Userdata at
+  `/home/kodi/.kodi/` is on the persist subvol via the
+  `sysroot-home-kodi.mount` initrd unit.
 
 Out-of-band recovery: Intel AMT (KVM + SOL) on the T480.
 See top-level `AGENTS.md` for credentials.
@@ -311,9 +315,15 @@ Other persist mounts (specific paths outside `/var`):
   `/etc/machine-id` bind mount; populated on first boot. See
   Identity files below.
 
-- `/home/kodi/` — entire kodi user home (Kodi userdata, moonlight-qt
-  pairing/config, etc.). Wired up in phase 5 when `kodi-standalone-
-  service` provides the user and the `/home/kodi/` mountpoint stub.
+- `/home/kodi/` — entire kodi user home (Kodi userdata in `.kodi/`,
+  moonlight-qt pairing/config in `.config/`, the Kodi instance UUID,
+  library, watch state). Bind-mounted from `@persist/<v>/home/kodi`
+  via `sysroot-home-kodi.mount` in the initrd. Owned by `kodi:kodi`
+  (uid/gid 420 — pinned in `sysusers.d/kodi.conf` for stability
+  across rebuilds; mode 0755 so root can traverse for HA's
+  `deploy.sh` to land Kodi addons). The directory is pre-created at
+  install time inside `@persist/<v>` via repart's `MakeDirectories=`,
+  and tmpfiles fixes ownership on every boot.
 
 ### Identity files
 
@@ -603,6 +613,8 @@ behaviour; the custom pieces are noted.
      `/sysroot/system/persist` (also `@VERSION@`-templated)
    - `sysroot-var.mount`: bind `/sysroot/system/persist/var` over
      `/sysroot/var`
+   - `sysroot-home-kodi.mount`: bind
+     `/sysroot/system/persist/home/kodi` over `/sysroot/home/kodi`
    - `sysroot-etc-machine\x2did.mount`: bind
      `/sysroot/system/persist/var/lib/theatre-os/machine-id` over
      `/sysroot/etc/machine-id`
@@ -648,20 +660,25 @@ behaviour; the custom pieces are noted.
    Side effect: the ESP isn't auto-mounted by the generator either,
    which is why we ship the explicit `efi.mount` (step 6).
 
-9. **Kodi starts.** `kodi-gbm.service` (from Arch's
-   `kodi-standalone-service` package) launches Kodi as user `kodi`
-   against `/dev/dri/card0` via gbm/EGL/KMS, on tty1. The unit ships
-   with `Conflicts=getty@tty1.service` upstream, so systemd
-   automatically stops the getty when Kodi starts (same pattern sddm
-   uses). Other ttys still get gettys for emergency console access via
+9. **Kodi starts.** `kodi-gbm.service` (vendored from the AUR
+   `kodi-standalone-service` package — see Custom code summary
+   for why we ship it ourselves) launches Kodi as user `kodi`
+   against `/dev/dri/card0` via gbm/EGL/KMS, on tty1. The unit
+   uses `PAMName=login` to land in `user-N.slice` (so XDG_RUNTIME_DIR,
+   the session bus, and tty ownership are set up properly), with
+   `Conflicts=getty@tty1.service` so systemd automatically stops
+   the getty when Kodi starts (same pattern sddm uses). The unit
+   is wired in via `Alias=display-manager.service`, which is
+   pulled by `graphical.target` (our `default.target`).
+   Other ttys still get gettys for emergency console access via
    AMT KVM. See "Kodi & moonlight session" below.
 
 ### Custom code summary
 
 Initrd subimage (`mkosi.images/initrd/`):
-- The version-templated `sysroot.mount`, the four `sysroot-*` mount
-  units (system-data, system-persist, var, etc-machine\x2did) and
-  the `theatre-os-machine-id.service` oneshot.
+- The version-templated `sysroot.mount`, the five `sysroot-*` mount
+  units (system-data, system-persist, var, home-kodi, etc-machine\x2did)
+  and the `theatre-os-machine-id.service` oneshot.
 - Per-image `mkosi.finalize` doing `@VERSION@` substitution.
 
 Rootfs (`mkosi.extra/`):
@@ -683,11 +700,24 @@ Rootfs (`mkosi.extra/`):
 - Five symlinks to `/dev/null` masking sysupdate's daemon, dbus
   alias, periodic timer, and reboot service+timer (so the
   `theatre-os update` wrapper is the only entry point).
+- `kodi-gbm.service` + `display-manager.service` alias symlink +
+  `default.target` → `graphical.target` symlink, vendored from the
+  AUR `kodi-standalone-service` package (which we don't depend on
+  directly because it's AUR-only and we'd rather not stand up AUR
+  build infra for a ~25-line unit). Pairs with:
+- `sysusers.d/kodi.conf` defining the `kodi` user with pinned UID/GID
+  420 and home `/home/kodi` (overriding upstream's `/var/lib/kodi`).
+- `tmpfiles.d/kodi.conf` ensuring `/home/kodi` is `0755 kodi:kodi`
+  on every boot (the bind-mount target inside `@persist/<v>` is
+  pre-created by repart but with no ownership guarantees).
+- `/usr/bin/theatreos-launch-moonlight` shell script: `chvt 2`,
+  `exec moonlight-qt`, `chvt 1` on exit. Triggered from inside
+  Kodi via a Python addon shipped in `ha-config/kodi/`.
 
 Top-level `mkosi.finalize` creates the `/system/data`,
-`/system/persist`, and `/efi` mountpoint stubs in the rootfs's
-`$BUILDROOT` (mkosi.extra would have shipped them, but git can't
-track empty dirs).
+`/system/persist`, `/efi`, and `/home/kodi` mountpoint stubs in the
+rootfs's `$BUILDROOT` (mkosi.extra would have shipped them, but
+git can't track empty dirs).
 
 Top-level `mkosi.conf` sets `UnifiedKernelImageFormat=%i_%v` so the
 install-time UKI is named `theatre-os_<v>.efi` to match what
@@ -720,8 +750,14 @@ Only one process at a time can hold DRM master on `/dev/dri/card0`,
 which means Kodi-gbm and moonlight-qt cannot share the screen. The
 solution is the standard Linux **virtual terminal switching** dance:
 
-- Kodi runs on **tty1** as a system service (`kodi-standalone-service`,
-  Arch package, runs as user `kodi`). Holds DRM master while the
+- Kodi runs on **tty1** as a system service (`kodi-gbm.service`,
+  vendored from the AUR `kodi-standalone-service` package; see
+  Custom code summary). The unit uses `User=kodi` + `PAMName=login`
+  to land in `user-N.slice`, which gets us XDG_RUNTIME_DIR + a
+  session bus + tty ownership for free (the upstream pattern; cost
+  is that graceful shutdown needs `kodi-send -a ShutDown` rather
+  than `systemctl poweroff` — HA's `theatre_turn_off` automation
+  already does this). Holds DRM master while the
   active VT is tty1.
 - moonlight-qt runs on **tty2**, launched on demand. The kernel revokes
   Kodi's DRM master when the active VT changes; moonlight takes it.
@@ -777,10 +813,12 @@ we'd add PipeWire alongside but Kodi/moonlight would still bypass it.
 
 ### Userdata: addons, skin, keymaps, settings
 
-theatre-os ships **no** Kodi customisations. The OS provides Arch's
-`kodi-standalone-service` package and a writable `/home/kodi/`
-mountpoint (bind-mounted from `@persist/<v>`); everything inside that
-home — Kodi userdata in `.kodi/` (addons like `service.avr.volume`,
+theatre-os ships **no** Kodi customisations. The OS provides the
+Arch `kodi` package + the vendored `kodi-gbm.service`/sysusers/
+tmpfiles from upstream `kodi-standalone-service`, plus a writable
+`/home/kodi/` mountpoint (bind-mounted from `@persist/<v>`);
+everything inside that home — Kodi userdata in `.kodi/` (addons
+like `service.avr.volume`,
 `script.theatre.lights.toggle`, `plugin.video.watchlist`,
 `context.go.to.show`, HAKA, etc., the Arctic Zephyr modded skin,
 keymaps, library, watch state, the Kodi instance UUID), moonlight-qt
@@ -1237,12 +1275,12 @@ at build time by `build.sh`):
 Type=linux-generic
 Label=theatreos-data
 Format=btrfs
-MakeDirectories=/@os /@persist /@os/@VERSION@/var /@persist/@VERSION@/var /@persist/@VERSION@/var/lib /@persist/@VERSION@/var/lib/ssh /@persist/@VERSION@/var/lib/theatre-os
+MakeDirectories=/@os /@persist /@os/@VERSION@/var /@persist/@VERSION@/var /@persist/@VERSION@/var/lib /@persist/@VERSION@/var/lib/ssh /@persist/@VERSION@/var/lib/theatre-os /@persist/@VERSION@/home /@persist/@VERSION@/home/kodi
 Subvolumes=/@os/@VERSION@:ro /@persist/@VERSION@
 CopyFiles=/:/@os/@VERSION@
 ExcludeFilesTarget=/@os/@VERSION@/var
 CopyFiles=/var:/@persist/@VERSION@/var
-SizeMinBytes=4G
+SizeMinBytes=8G
 GrowFileSystem=yes
 ```
 
@@ -1282,8 +1320,10 @@ preprocess the repart configs it hands to systemd-repart.
 
 ### First-boot grow
 
-The data partition ships at ~4 GiB; the target disk is ~256 GiB+.
-`systemd-repart.service` runs early in boot, sees `GrowFileSystem=yes`
+The data partition ships at ~8 GiB (was 4 GiB pre-Kodi; bumped in
+phase 5 to fit the seeded rootfs + Qt stack); the target disk is
+~256 GiB+. `systemd-repart.service` runs early in boot, sees
+`GrowFileSystem=yes`
 in the shipped repart config (also baked into the OS image so it's
 available on subsequent boots — irrelevant after the first since
 nothing's left to grow). One pass, partition expands to fill the
@@ -1349,8 +1389,13 @@ publish → Local testing.)
    build B, publish, `theatre-os update` inside VM, reboot, confirm
    on B; pick A from systemd-boot menu, reboot, confirm rollback;
    run `vacuum.sh 1`, confirm dufs trimmed.
-5. Port LibreELEC tweaks (BT/WOL/power-key/wake-chime) → systemd units
-   in image.
+5. ✅ Add Kodi (gbm) + moonlight-qt + the moonlight launcher script.
+   `kodi-standalone-service` is AUR-only, so we vendor its
+   `kodi-gbm.service` + sysusers + tmpfiles into `mkosi.extra/`
+   rather than standing up AUR build infrastructure (revisit if we
+   ever build Kodi ourselves to test experimental features). LibreELEC
+   tweaks (BT/WOL/power-key/wake-chime) need real hardware to
+   validate; deferred to phase 6.
 6. Bring up on T480 via AMT KVM + `dd` of installer image. Stage at
    `theatre-t480.home.lasath.com`, ZBook stays prod at `theatre`.
 7. Daily-drive on T480 in parallel with ZBook for 2 weeks; iterate.

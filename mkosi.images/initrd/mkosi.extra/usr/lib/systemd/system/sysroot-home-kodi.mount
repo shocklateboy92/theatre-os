@@ -1,0 +1,39 @@
+# /home/kodi ← /system/persist/home/kodi bind mount, set up in the
+# initrd at /sysroot/home/kodi so it survives switch-root as
+# /home/kodi on the running rootfs.
+#
+# Why an entire bind mount rather than letting it sit inside /var?
+# Userdata for Kodi (.kodi/), moonlight-qt config (.config/), the
+# library DB and watch state, the Kodi instance UUID — all live
+# under the user's home. Convention is /home/<user>; sticking it
+# under /var/lib/kodi/ would technically work but breaks every tool
+# that reads $HOME or /home/kodi/.kodi/.
+#
+# Owned by kodi:kodi (uid/gid 420, see sysusers). Mode is set on
+# every boot by tmpfiles (see /usr/lib/tmpfiles.d/kodi.conf) so
+# we don't have to worry about the underlying persist directory's
+# ownership being correct from install time.
+#
+# The directory at @persist/<v>/home/kodi is pre-created at install
+# time by repart's MakeDirectories= (see
+# mkosi.repart.in/10-data.conf.in).
+#
+# Source path is /sysroot/system/persist/home/kodi because in the
+# initrd context, the persist subvol is mounted at
+# /sysroot/system/persist (see sysroot-system-persist.mount).
+
+[Unit]
+Description=theatre-os /home/kodi bind mount (initrd-side)
+DefaultDependencies=no
+Requires=sysroot-system-persist.mount
+After=sysroot-system-persist.mount
+Before=initrd-fs.target
+
+[Mount]
+What=/sysroot/system/persist/home/kodi
+Where=/sysroot/home/kodi
+Type=none
+Options=bind
+
+[Install]
+RequiredBy=initrd-fs.target

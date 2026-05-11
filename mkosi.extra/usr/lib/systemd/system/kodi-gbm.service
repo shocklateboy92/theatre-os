@@ -1,0 +1,70 @@
+# theatre-os: Kodi (gbm-direct) as a system unit that runs as the
+# `kodi` user inside its own user-slice via PAMName=login.
+#
+# Vendored from the AUR `kodi-standalone-service` package (graysky2,
+# x86/init/kodi-gbm.service) with light theatre-os adaptations.
+# Kept aligned with upstream behaviour so anyone familiar with the
+# Arch Kodi standalone setup can navigate this.
+#
+# Why this lives in mkosi.extra/ rather than coming from the package:
+# kodi-standalone-service is AUR-only (not in extra/community), and
+# we'd rather not stand up AUR build infrastructure in the mkosi
+# build for one ~25-line unit file. We may revisit if/when we need
+# more AUR packages or build Kodi ourselves to test experimental
+# features. See README → Kodi & moonlight session for the rationale.
+#
+# PAMName=login + User=kodi is the upstream pattern that puts the
+# Kodi process into user-N.slice rather than system.slice. The
+# tradeoff (per upstream README): graceful shutdown via `systemctl
+# poweroff` doesn't cleanly let Kodi flush state — use `kodi-send
+# -a ShutDown` instead. HA's theatre_turn_off automation already
+# does this. The benefit is we get XDG_RUNTIME_DIR, a session bus,
+# and proper TTY ownership for free via PAM, which makes Kodi's
+# expected runtime environment Just Work.
+#
+# Conflicts=getty@tty1.service stops the getty when Kodi starts,
+# same pattern sddm uses. Other ttys still get gettys for emergency
+# console access via AMT KVM (see README → Boot sequence).
+#
+# Alias=display-manager.service makes `systemctl enable kodi-gbm`
+# also enable it under the conventional display-manager symlink, so
+# Kodi launches at the graphical target without us having to fight
+# systemd's preset machinery.
+
+[Unit]
+Description=Kodi standalone (GBM) — theatre-os
+# Wait for the bits Kodi actually needs. We strip:
+#   - mysqld.service (no MySQL/MariaDB; Kodi uses its bundled SQLite)
+#   - lircd.service (no IR receiver; remote is BT/CEC)
+#   - upower.service (no battery to display)
+#   - polkit.service (Kodi's standalone-service uses polkit only for
+#     suspend/poweroff actions; we ship polkit but don't gate Kodi
+#     startup on it — if polkit fails, Kodi still runs, the user
+#     just can't power down from inside Kodi)
+After=remote-fs.target systemd-user-sessions.service network-online.target nss-lookup.target sound.target bluetooth.target
+Wants=network-online.target
+Conflicts=getty@tty1.service
+
+[Service]
+User=kodi
+Group=kodi
+# `network` and `input` aren't in upstream's SupplementaryGroups but
+# we grant them here:
+#   - network: lets Kodi join the LAN multicast groups it uses for
+#     UPnP/DLNA discovery (Kodi normally runs as a desktop user with
+#     this implicitly).
+#   - input: lets Kodi read /dev/input/* directly for the BT remote.
+#     udev tags input devices for the active session user via uaccess
+#     normally, but with PAMName=login on tty1 the kodi user IS the
+#     active-session user so this is belt-and-braces.
+SupplementaryGroups=audio video optical input video_dma network render
+EnvironmentFile=-/etc/conf.d/kodi-standalone
+PAMName=login
+TTYPath=/dev/tty1
+ExecStart=/usr/lib/kodi/kodi.bin --standalone
+Restart=on-abort
+StandardInput=tty
+StandardOutput=journal
+
+[Install]
+Alias=display-manager.service

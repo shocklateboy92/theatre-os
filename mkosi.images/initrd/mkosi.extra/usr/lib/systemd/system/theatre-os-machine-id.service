@@ -1,0 +1,29 @@
+# Initialize /sysroot/system/persist/var/lib/theatre-os/machine-id
+# on first boot if it doesn't yet exist. systemd-id128 generates a
+# fresh random UUID; subsequent boots see the file populated and
+# this service skips via ConditionPathExists=!.
+#
+# Runs in the initrd, after the persist subvol is mounted but
+# before sysroot-etc-machine\x2did.mount tries to bind it over
+# /sysroot/etc/machine-id.
+#
+# The repart conf pre-creates /var/lib/theatre-os/ as an empty
+# directory inside @persist/<v>; this service populates the file.
+
+[Unit]
+Description=theatre-os generate persistent /etc/machine-id on first boot
+DefaultDependencies=no
+ConditionPathExists=|!/sysroot/system/persist/var/lib/theatre-os/machine-id
+Requires=sysroot-system-persist.mount
+After=sysroot-system-persist.mount
+Before=sysroot-etc-machine\x2did.mount initrd-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# systemd-id128 new prints a fresh 128-bit ID; -u writes 32 hex
+# chars + newline (the format /etc/machine-id wants).
+ExecStart=/bin/sh -c 'systemd-id128 new -u > /sysroot/system/persist/var/lib/theatre-os/machine-id'
+
+[Install]
+WantedBy=initrd-fs.target

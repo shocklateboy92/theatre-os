@@ -1,0 +1,32 @@
+# Bind /var/lib/theatre-os/machine-id from the persist subvol over
+# /etc/machine-id, set up in the initrd at /sysroot/etc/machine-id
+# so it survives switch-root. Pre-populating /etc/machine-id from
+# persist before PID 1 in the rootfs starts means PID 1 reads a
+# valid value immediately and skips its transient-machine-id setup
+# entirely — without this, machine-id regenerates each boot
+# because /etc/ is RO and the post-boot commit step can't write
+# back. See README → Persistence model → Identity files.
+#
+# The persist file is created/populated on first boot by
+# theatre-os-machine-id.service (oneshot, runs After= the persist
+# mount but Before= this bind).
+#
+# Source path notes the /sysroot/system/persist prefix because in
+# the initrd context, persist is mounted at /sysroot/system/persist
+# (see sysroot-system-persist.mount).
+
+[Unit]
+Description=theatre-os /etc/machine-id bind from persist (initrd-side)
+DefaultDependencies=no
+Requires=sysroot-system-persist.mount theatre-os-machine-id.service
+After=sysroot-system-persist.mount theatre-os-machine-id.service
+Before=initrd-fs.target
+
+[Mount]
+What=/sysroot/system/persist/var/lib/theatre-os/machine-id
+Where=/sysroot/etc/machine-id
+Type=none
+Options=bind
+
+[Install]
+RequiredBy=initrd-fs.target

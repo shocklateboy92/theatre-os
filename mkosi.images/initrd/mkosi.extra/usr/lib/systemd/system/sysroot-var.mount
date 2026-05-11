@@ -1,0 +1,25 @@
+# /var ← /system/persist/var bind mount, set up in the initrd at
+# /sysroot/var so it survives switch-root as /var on the running
+# rootfs. Everything in /var persists by default (matches normal
+# Linux semantics; see README → Persistence model → What's
+# persistent).
+#
+# Source path is /sysroot/system/persist/var because in the initrd
+# context, the persist subvol is mounted at /sysroot/system/persist
+# (see sysroot-system-persist.mount).
+
+[Unit]
+Description=theatre-os /var bind mount (initrd-side)
+DefaultDependencies=no
+Requires=sysroot-system-persist.mount
+After=sysroot-system-persist.mount
+Before=initrd-fs.target
+
+[Mount]
+What=/sysroot/system/persist/var
+Where=/sysroot/var
+Type=none
+Options=bind
+
+[Install]
+RequiredBy=initrd-fs.target

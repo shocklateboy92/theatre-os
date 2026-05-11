@@ -2,10 +2,10 @@
 # the initrd treats /sysroot specially — it's the path it pivots into
 # during switch-root.
 #
-# @VERSION@ is substituted at build time by mkosi.finalize. The same
-# value is in this image's /usr/lib/os-release VERSION_ID, so the
-# subvolume name baked into this unit always matches the UKI it's
-# shipped in.
+# @VERSION@ is substituted at build time by
+# mkosi.images/initrd/mkosi.finalize. The same value is in this
+# image's /usr/lib/os-release VERSION_ID, so the subvolume name
+# baked into this unit always matches the UKI it's shipped in.
 #
 # RO because @os/<v> is a RO btrfs subvolume — writes are supposed
 # to fail loudly. See README → Updates & experiment mode.
@@ -13,8 +13,6 @@
 [Unit]
 Description=theatre-os rootfs (@os/@VERSION@)
 DefaultDependencies=no
-Requires=system-data.mount
-After=system-data.mount
 Before=initrd-root-fs.target
 
 [Mount]

@@ -1,0 +1,24 @@
+# Mounts the per-version persist subvolume (@persist/<v>) at
+# /sysroot/system/persist in the initrd, surviving switch-root as
+# /system/persist on the running rootfs. RW. The bind mounts in
+# this directory (sysroot-var.mount, sysroot-etc-machine\x2did.mount,
+# etc.) all source from here.
+#
+# @VERSION@ is substituted at build time by
+# mkosi.images/initrd/mkosi.finalize.
+
+[Unit]
+Description=theatre-os persist (@persist/@VERSION@) (initrd-side)
+DefaultDependencies=no
+Requires=sysroot-system-data.mount
+After=sysroot-system-data.mount
+Before=initrd-fs.target
+
+[Mount]
+What=/dev/disk/by-label/theatreos-data
+Where=/sysroot/system/persist
+Type=btrfs
+Options=rw,subvol=/@persist/@VERSION@
+
+[Install]
+RequiredBy=initrd-fs.target

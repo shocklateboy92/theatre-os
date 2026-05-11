@@ -32,7 +32,7 @@ Format=btrfs
 # Repart applies CopyFiles= before MakeDirectories= regardless of
 # declaration order (see repart.d(5)), so MakeDirectories= can
 # safely fill in the gaps.
-MakeDirectories=/@os /@persist /@os/@VERSION@/var /@persist/@VERSION@/var /@persist/@VERSION@/var/lib /@persist/@VERSION@/var/lib/ssh
+MakeDirectories=/@os /@persist /@os/@VERSION@/var /@persist/@VERSION@/var /@persist/@VERSION@/var/lib /@persist/@VERSION@/var/lib/ssh /@persist/@VERSION@/var/lib/theatre-os
 
 Subvolumes=/@os/@VERSION@:ro /@persist/@VERSION@
 

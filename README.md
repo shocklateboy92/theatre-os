@@ -262,13 +262,21 @@ enumerate `/var` subdirs individually; "everything in `/var` persists
 by default" matches normal Linux and avoids fighting services that
 write somewhere we didn't predict.
 
+The bind mount happens **in the initrd** (`sysroot-var.mount`,
+binding `/sysroot/system/persist/var` → `/sysroot/var`), so it's
+already in place at switch-root. After switch-root, the rootfs's
+PID 1 sees `/var` as already-mounted and adopts it as a normal
+managed mount. This same pattern applies to all our other mounts
+(`system-data`, `system-persist`, `etc/machine-id`) — see Boot
+sequence.
+
 Per-version persist subvolumes are seeded at install time with the
 **same `/var` tree the rootfs ships** (via repart `CopyFiles=/var:
-/@persist/<v>/var`). That way, when `var.mount` bind-attaches at
-boot, packages find their state under `/var/lib/{dbus,systemd,…}`
-intact — same as on a normal install. Without the seed, services
-on first boot see an empty `/var/lib/` and silently re-initialize
-state, which has bitten us once already.
+/@persist/<v>/var`). That way, when the bind attaches at boot,
+packages find their state under `/var/lib/{dbus,systemd,…}` intact
+— same as on a normal install. Without the seed, services on first
+boot would see an empty `/var/lib/` and silently re-initialize state,
+which has bitten us once already.
 
 Other persist mounts (specific paths outside `/var`):
 
@@ -282,31 +290,49 @@ Other persist mounts (specific paths outside `/var`):
   `sshdgenkeys.service` drop-in that overrides Arch's hardcoded
   ExecStart to write keys to the new path.
 
+- `/var/lib/theatre-os/machine-id` — backing file for the
+  `/etc/machine-id` bind mount; populated on first boot. See
+  Identity files below.
+
 - `/home/kodi/` — entire kodi user home (Kodi userdata, moonlight-qt
   pairing/config, etc.). Wired up in phase 5 when `kodi-standalone-
   service` provides the user and the `/home/kodi/` mountpoint stub.
 
 ### Identity files
 
-`/etc/machine-id` is **transient** in the current implementation:
-systemd generates one on each boot and bind-mounts it from `/run`
-over `/etc/machine-id` (which we ship as an empty 0-byte file).
-Nothing in our stack keys off it (HA uses Kodi's instance UUID;
-DHCP normally keys off MAC), so the impact is minimal — chiefly
-that `journalctl -m` can't correlate logs across boots.
+`/etc/machine-id` is **persistent** via a bind mount set up in the
+initrd: `sysroot-etc-machine\x2did.mount` binds
+`/sysroot/system/persist/var/lib/theatre-os/machine-id` over
+`/sysroot/etc/machine-id` before switch-root. By the time PID 1 in
+the running rootfs reads `/etc/machine-id`, it sees a populated
+value and skips its transient-machine-id setup entirely (per
+`machine-id(5)`'s "first boot semantics", a non-empty
+`/etc/machine-id` is treated as already-initialized).
 
-The "right" fix is a bind mount from a persistent file over
-`/etc/machine-id`, but PID 1 generates the transient ID *before*
-any `.mount` unit gets a chance to attach, so the bind would have
-to ship in the initrd AND the initrd would need `/system/persist`
-mounted there too (it's currently mounted only after switch-root).
-Significant work for a single-HTPC use case where nothing depends
-on it. Punt; revisit if it ever bites.
+We must do the bind in the initrd because PID 1 in the rootfs reads
+machine-id during its own initialization, *before* any `.mount`
+unit gets a chance to run — a rootfs-side bind would attach too
+late. Doing it in the initrd, before switch-root, is the standard
+pattern image-based OSes converge on (silverblue, microos, bootc,
+particleos all do it this way).
+
+The persist file is initialized on first boot by the small
+`theatre-os-machine-id.service` oneshot in the initrd: if
+`/sysroot/system/persist/var/lib/theatre-os/machine-id` doesn't
+exist yet, it generates a fresh UUID via `systemd-id128 new`. On
+subsequent boots the file already exists and the service no-ops
+via `ConditionPathExists=`.
+
+The rootfs ships an empty 0-byte `/etc/machine-id` as the
+mountpoint stub (the bind mount needs the target file to exist).
+This is the canonical pattern recommended by `machine-id(5)` for
+read-only image setups.
 
 sshd host keys are generated on first boot by Arch's `sshdgenkeys.
 service` (which we override to write to `/var/lib/ssh/`), then live
-in persist forever. No issue — sshd doesn't need them existing
-*before* it starts.
+in persist forever. No initrd machinery needed — sshd doesn't need
+its host keys existing *before* it starts, only by the time
+multi-user.target is reached.
 
 We disable `systemd-coredump` writing coredumps to disk — a
 crash-looping service could otherwise fill `/var/lib/systemd/coredump/`
@@ -519,41 +545,58 @@ behaviour; the custom pieces are noted.
    `mkosi.extra/`, so we'd otherwise have no way to ship
    `sysroot.mount` etc. into it.
 
-3. **Mount the data partition.** The initrd's `system-data.mount`
-   unit finds `/dev/disk/by-label/theatreos-data` via udev and
-   mounts the btrfs root at `/system/data`. Wired into
-   `initrd-root-fs.target.requires/` so it runs before sysroot.mount.
+3. **Mount the OS rootfs subvolume.** The initrd's `sysroot.mount`
+   unit mounts `@os/<v>` RO at `/sysroot`. The `<v>` is baked into
+   the unit at image-build time by `mkosi.images/initrd/mkosi.
+   finalize`, which `sed`'s `@VERSION@` → `$IMAGE_VERSION` against
+   the staged unit. Each UKI ships with its own version-specific
+   `sysroot.mount`, so booting an older UKI from the systemd-boot
+   menu mounts the matching `@os/<v>` correctly.
 
-4. **Mount the OS rootfs subvolume.** `sysroot.mount` mounts
-   `@os/<v>` RO at `/sysroot`. The `<v>` is baked into the unit at
-   image-build time by `mkosi.images/initrd/mkosi.finalize`, which
-   `sed`'s `@VERSION@` → `$IMAGE_VERSION` against the staged unit.
-   Each UKI ships with its own version-specific `sysroot.mount`, so
-   booting an older UKI from the systemd-boot menu mounts the
-   matching `@os/<v>` correctly.
+4. **Mount everything else under `/sysroot/`** — all in the initrd,
+   before switch-root. Standard image-OS pattern (silverblue,
+   microos, particleos all do this).
+   - `sysroot-system-data.mount`: data partition root (subvolid=5)
+     at `/sysroot/system/data`
+   - `sysroot-system-persist.mount`: `@persist/<v>` at
+     `/sysroot/system/persist` (also `@VERSION@`-templated)
+   - `sysroot-var.mount`: bind `/sysroot/system/persist/var` over
+     `/sysroot/var`
+   - `sysroot-etc-machine\x2did.mount`: bind
+     `/sysroot/system/persist/var/lib/theatre-os/machine-id` over
+     `/sysroot/etc/machine-id`
+   - `theatre-os-machine-id.service`: oneshot that runs *between*
+     the persist mount and the machine-id bind on first boot, to
+     `systemd-id128 new` into the persist file if it doesn't exist.
 
-5. **switch-root** into `/sysroot`.
+   All wired into `initrd-fs.target.requires/`. Setting these up in
+   the initrd means the rootfs's PID 1 sees them as already-mounted
+   from the moment it starts — and it reads `/etc/machine-id` very
+   early in its own initialization, before any rootfs `.mount` unit
+   could run, so the bind has to happen pre-switch-root for the
+   value to be persistent.
 
-6. **Mount the persist subvolume + bind-mounts.**
-   `system-persist.mount` (also version-templated by mkosi.finalize)
-   mounts `@persist/<v>` at `/system/persist`. `var.mount`
-   bind-mounts `/system/persist/var` over `/var`. Both pulled in via
-   `local-fs.target.requires/` symlinks shipped in the rootfs.
+5. **switch-root** into `/sysroot`. The kernel mounts set up under
+   `/sysroot/...` survive the namespace transition and re-resolve
+   as `/system/data`, `/system/persist`, `/var`, `/etc/machine-id`
+   in the running rootfs. The rootfs's PID 1 enumerates
+   `/proc/self/mountinfo` at startup and synthesizes mount units
+   for them on the fly — no rootfs-side `.mount` units needed.
 
-7. **First-boot identity generation.** `sshdgenkeys.service` (Arch's
+6. **First-boot identity generation.** `sshdgenkeys.service` (Arch's
    wrapper, with our drop-in overriding the path) generates host
    keys into `/var/lib/ssh/`. They land on the persist subvol via
-   the `var.mount` bind, so they survive reboots and rollbacks.
-   `/etc/machine-id` is currently regenerated each boot (transient);
-   see Persistence model → Identity files for why.
+   the inherited `/var` bind, so they survive reboots and
+   rollbacks. `/etc/machine-id` is already populated by the time
+   anything reads it (per step 4).
 
-8. **Normal systemd boot.** networkd, sshd, bluetoothd, etc.
+7. **Normal systemd boot.** networkd, sshd, bluetoothd, etc.
    `gpt_auto=0` is on the kernel cmdline to disable
    `systemd-gpt-auto-generator`, which would otherwise leak a
    dependency on `/dev/gpt-auto-root` and hang `initrd-root-fs.
    target` waiting for a discoverable root partition we don't have.
 
-9. **Kodi starts.** `kodi-gbm.service` (from Arch's
+8. **Kodi starts.** `kodi-gbm.service` (from Arch's
    `kodi-standalone-service` package) launches Kodi as user `kodi`
    against `/dev/dri/card0` via gbm/EGL/KMS, on tty1. The unit ships
    with `Conflicts=getty@tty1.service` upstream, so systemd
@@ -563,16 +606,29 @@ behaviour; the custom pieces are noted.
 
 ### Custom code summary
 
-Initrd: `mkosi.images/initrd/` subimage with `Include=mkosi-initrd`,
-plus version-templated `sysroot.mount` and `system-data.mount`.
-Rootfs: `system-data.mount` (same as initrd's), `system-persist.mount`,
-`var.mount`, `sshdgenkeys.service` drop-in. Repart conf
-(`mkosi.repart.in/10-data.conf.in`) declares the partition layout
-including `MakeDirectories=` for required persist paths and
-`CopyFiles=/var:/@persist/<v>/var` to seed package state. Two
-`mkosi.finalize` hooks (one top-level, one in `mkosi.images/initrd/`)
-do the `@VERSION@` substitution. No generators, no overlayfs, no
-exotic machinery; total LoC small.
+Everything custom lives in the initrd subimage at
+`mkosi.images/initrd/`: the version-templated `sysroot.mount`, the
+five `sysroot-*` mount units (system-data, system-persist, var,
+etc-machine\x2did) and the `theatre-os-machine-id.service` oneshot.
+Plus the per-image `mkosi.finalize` that does the `@VERSION@`
+substitution.
+
+The rootfs only contributes:
+- An empty 0-byte `/etc/machine-id` mountpoint stub (`mkosi.extra/`)
+- `sshd_config.d/10-theatreos.conf` redirecting `HostKey=` to
+  `/var/lib/ssh/`
+- `sshdgenkeys.service.d/10-theatreos-persist.conf` overriding
+  Arch's hardcoded keygen path to match
+- A symlink wanting sshd from `multi-user.target`
+- Top-level `mkosi.finalize` that creates the `/system/data` and
+  `/system/persist` mountpoint stubs (mkosi.extra would have
+  shipped them, but git can't track empty dirs).
+
+Plus the partition layout in `mkosi.repart.in/10-data.conf.in`
+(declares subvolumes, pre-creates persist target dirs via
+`MakeDirectories=`, seeds `@persist/<v>/var` from rootfs `/var`).
+
+No generators, no overlayfs, no exotic machinery; total LoC small.
 
 ## Kodi & moonlight session
 
@@ -779,16 +835,20 @@ mechanisms in this repo, working at different layers:
    tree before invoking mkosi. Output dir (`mkosi.repart/`) is
    gitignored.
 
-2. **`mkosi.finalize` + literal `@VERSION@` in mkosi.extra/ files**
-   for files going INTO the rootfs (specifically, the
-   `sysroot.mount` / `system-persist.mount` units that need the
-   version baked into their `subvol=...` paths). These don't need
-   pre-rendering because `mkosi.finalize` runs in the build sandbox
-   with `$BUILDROOT` pointing at the rootfs being assembled and
+2. **`mkosi.images/initrd/mkosi.finalize` + literal `@VERSION@`
+   in initrd-side `mkosi.extra/` files** for the version-stamped
+   initrd mount units (`sysroot.mount`, `sysroot-system-persist.
+   mount`, `sysroot-etc-machine\x2did.mount`). No pre-rendering
+   needed — `mkosi.finalize` runs in the build sandbox with
+   `$BUILDROOT` pointing at the initrd being assembled and
    `$IMAGE_VERSION` exported — it `sed`'s the placeholders in place,
    inside the throwaway sandbox, with no effect on the source tree.
-   The initrd subimage carries its own `mkosi.finalize` for the same
-   reason.
+
+The top-level `mkosi.finalize` exists too but only for creating
+empty `/system/data` and `/system/persist` mountpoint stubs in the
+rootfs's `$BUILDROOT` (mkosi.extra would have shipped them, but
+git can't track empty dirs without leaving marker files in the
+final rootfs).
 
 **Always invoke via `build.sh`, never `sudo mkosi` directly** —
 running mkosi without the templating step uses stale repart configs
@@ -929,52 +989,48 @@ mkosi.conf                            # all top-level mkosi config
                                       #   kernel cmdline, etc.)
 mkosi.version                         # executable, prints date stamp
 mkosi.extra/                          # files overlaid onto the rootfs:
-                                      #   custom systemd units, the
-                                      #   theatre-os CLI, root SSH
-                                      #   pubkeys, sshd_config, …
+                                      #   sshd config drop-ins, root
+                                      #   SSH pubkeys, the empty
+                                      #   /etc/machine-id mountpoint
+                                      #   stub, sshdgenkeys override.
+mkosi.finalize                        # creates /system/data and
+                                      #   /system/persist mountpoint
+                                      #   stubs in $BUILDROOT (mkosi.
+                                      #   extra can't track empty
+                                      #   dirs cleanly).
 mkosi.repart.in/                      # repart configs, with @VERSION@
                                       #   placeholders. Source of truth.
   00-esp.conf
   10-data.conf.in
-mkosi.repart/                         # generated by build.sh
-                                      #   from mkosi.repart.in/.
-                                      #   Gitignored.
-build.sh                              # build entry point at the repo
-                                      #   root (NOT under scripts/) so
-                                      #   it's hard to miss — runs the
-                                      #   templating step then exec's
-                                      #   sudo mkosi. Always invoke this
-                                      #   instead of mkosi directly.
-publish.sh                            # uploads sysupdate artefacts to
-                                      #   dufs (the .raw stays local)
-mkosi.images/initrd/                  # custom initrd subimage \u2014
-                                      #   Include=mkosi-initrd plus
-                                      #   our own mkosi.extra/ overlay
-                                      #   carrying sysroot.mount and
-                                      #   system-data.mount.
+mkosi.repart/                         # generated by build.sh from
+                                      #   mkosi.repart.in/. Gitignored.
+mkosi.images/initrd/                  # custom initrd subimage —
+                                      #   Include=mkosi-initrd plus our
+                                      #   own mkosi.extra/ overlay
+                                      #   carrying all the .mount units
+                                      #   and theatre-os-machine-id.
+                                      #   service.
   mkosi.conf
-  mkosi.finalize                      # @VERSION@ -> $IMAGE_VERSION
+  mkosi.finalize                      # @VERSION@ → $IMAGE_VERSION
                                       #   substitution against the
                                       #   initrd's $BUILDROOT.
   mkosi.extra/...
-mkosi.finalize                        # same substitution against
-                                      #   the rootfs's $BUILDROOT.
 build.sh                              # build entry point at the repo
                                       #   root (NOT under scripts/) so
-                                      #   it's hard to miss \u2014 runs the
+                                      #   it's hard to miss — runs the
                                       #   repart templating step then
                                       #   exec's sudo mkosi. Always
                                       #   invoke this instead of mkosi
                                       #   directly.
 publish.sh                            # uploads sysupdate artefacts to
-                                      #   dufs (the .raw stays local)
+                                      #   dufs (the .raw stays local).
 ```
 
 The only `mkosi.images/` subimage we need is the custom initrd. The
 main bootable disk image (`Format=disk`) lives at the top level so
 mkosi's `vm`/`boot`/`shell` verbs work against it directly (those
-verbs only operate on the top-level image, not on subimages \u2014 see
-mkosi 26 source). The `tar` and `UKI` artefacts come out of the
+verbs only operate on the top-level image, not on subimages — see
+mkosi 26 source). The `tar` and `.efi` artefacts come out of the
 same single build via `SplitArtifacts=uki,tar`.
 
 ### Installer disk layout (built by repart)
@@ -999,7 +1055,7 @@ at build time by `build.sh`):
 Type=linux-generic
 Label=theatreos-data
 Format=btrfs
-MakeDirectories=/@os /@persist /@os/@VERSION@/var /@persist/@VERSION@/var /@persist/@VERSION@/var/lib /@persist/@VERSION@/var/lib/ssh
+MakeDirectories=/@os /@persist /@os/@VERSION@/var /@persist/@VERSION@/var /@persist/@VERSION@/var/lib /@persist/@VERSION@/var/lib/ssh /@persist/@VERSION@/var/lib/theatre-os
 Subvolumes=/@os/@VERSION@:ro /@persist/@VERSION@
 CopyFiles=/:/@os/@VERSION@
 ExcludeFilesTarget=/@os/@VERSION@/var
@@ -1015,12 +1071,14 @@ ones). `MakeDirectories=` creates them; `Subvolumes=` creates the
 versioned children.
 
 `@persist/<v>` is also pre-populated at install time:
-- The empty bind-mount target dirs (`/var/log/`, `/var/lib/ssh/`,
-  …) are created by `MakeDirectories=`. Done at install time
-  rather than at first boot via tmpfiles because tmpfiles runs
-  `After=local-fs.target` which is what `var.mount` feeds INTO,
-  creating an ordering cycle that systemd resolves by deleting
-  `local-fs.target/start` and dropping the system into emergency.
+- The empty bind-mount target dirs (`/var/lib/ssh/`,
+  `/var/lib/theatre-os/` for the persisted machine-id, …) are
+  created by `MakeDirectories=`. Done at install time rather than
+  at first boot via tmpfiles because tmpfiles runs
+  `After=local-fs.target` and our bind mounts feed INTO that
+  target — declaring tmpfiles as a dependency creates an ordering
+  cycle that systemd resolves by deleting `local-fs.target/start`
+  and dropping the system into emergency.
 - `/var/...` is seeded with the rootfs's `/var` tree
   (`CopyFiles=/var:/@persist/<v>/var`) so packages find their
   state under `/var/lib/{dbus,systemd,…}` populated on first
@@ -1029,10 +1087,11 @@ versioned children.
 
 `@os/<v>/var/` is left empty — `ExcludeFilesTarget=` keeps the
 rootfs's `/var/` contents out of the OS subvolume (they're
-bind-shadowed by `var.mount` at runtime anyway, so duplicating
-them costs disk for no benefit). `MakeDirectories=` ensures the
-empty `/@os/<v>/var/` directory exists so `var.mount` has a
-mountpoint to attach to.
+bind-shadowed by the inherited `/var` bind mount at runtime
+anyway, so duplicating them costs disk for no benefit).
+`MakeDirectories=` ensures the empty `/@os/<v>/var/` directory
+exists so the bind mount has a mountpoint to attach to (set up
+in the initrd at `/sysroot/var` — see Boot sequence).
 
 The version templating exists because systemd-repart's `Subvolumes=`
 doesn't expand specifiers — see `repart.d(5)` SPECIFIERS. mkosi
@@ -1091,15 +1150,17 @@ publish → Local testing.)
    emergency. This step exists ahead of phase 3 so the rest of the
    work has a real `mkosi vm` test loop instead of a hand-rolled
    fake disk.
-3. Add initrd + rootfs mount logic. The version stamp from
-   `mkosi.version` flows through `mkosi.finalize` into static
-   `.mount` units shipped via `mkosi.extra/`, which mount `@os/<v>`
-   RO at `/` (initrd) and `@persist/<v>` at `/system/persist`
-   (rootfs), plus the `/var` bind-mount. The initrd half lives in a
-   sibling subimage at `mkosi.images/initrd/` so it can carry its
-   own version-templated `sysroot.mount`. Disk from step 2 now
-   boots end-to-end in `mkosi vm`. Verify first-boot grow at the
-   same time.
+3. Add initrd-side mount logic. All filesystem setup happens in the
+   initrd before switch-root: `@os/<v>` at `/sysroot`, the data
+   partition root at `/sysroot/system/data`, `@persist/<v>` at
+   `/sysroot/system/persist`, plus bind mounts for `/sysroot/var`
+   and `/sysroot/etc/machine-id`. After switch-root, the rootfs's
+   PID 1 inherits these as already-attached mounts. machine-id is
+   persistent (from a file under persist that's auto-generated on
+   first boot). All custom units live in the `mkosi.images/initrd/`
+   subimage; version stamping happens via `mkosi.images/initrd/
+   mkosi.finalize`. Disk from step 2 now boots end-to-end in
+   `mkosi vm`. Verify first-boot grow at the same time.
 4. Add systemd-sysupdate + `theatre-os update` wrapper. Test by
    `mkosi serve`-ing a second build and running an update inside
    the VM from step 3.

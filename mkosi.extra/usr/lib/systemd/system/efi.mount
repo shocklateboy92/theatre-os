@@ -1,0 +1,23 @@
+# Mount the ESP at /efi.
+#
+# bootctl, kernel-install, and systemd-sysupdate (when a transfer file
+# uses PathRelativeTo=esp) all expect the ESP to be discoverable at one
+# of /efi, /boot, or /boot/efi. Despite the README's earlier claim that
+# sysupdate would locate the ESP itself, in practice it just looks for
+# a mounted FAT volume at the conventional paths and bails otherwise.
+#
+# We use LABEL=ESP (set in mkosi.repart.in/00-esp.conf via repart's
+# default ESP creation) rather than the partition UUID so the same image
+# works on any host with an ESP labelled `ESP`.
+
+[Unit]
+Description=EFI System Partition Automount
+DefaultDependencies=no
+Conflicts=umount.target
+Before=local-fs.target umount.target
+
+[Mount]
+What=/dev/disk/by-label/ESP
+Where=/efi
+Type=vfat
+Options=umask=0077,nodev,nosuid,noexec

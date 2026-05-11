@@ -1,0 +1,64 @@
+#!/bin/sh
+# theatre-os — single entry point for OS-level operations on a running box.
+#
+# All verbs other than `update` and `list` are stubs in this phase; see
+# README → Updates & experiment mode for the full surface. Adding a verb
+# means adding a `cmd-<verb>.sh` under /usr/lib/theatre-os/ and an arm
+# in the dispatcher below.
+#
+# We deliberately do NOT expose systemd-sysupdate directly: the daemon
+# and timer are masked in the image so this script is the only path
+# that runs an update, ensuring the experiment-mode guard and the
+# persist snapshot always run as part of the transaction.
+
+set -eu
+
+LIB=/usr/lib/theatre-os
+# shellcheck source=/dev/null
+. "$LIB/lib.sh"
+
+usage() {
+    cat >&2 <<EOF
+Usage: theatre-os <command> [args...]
+
+Commands:
+  update              Pull and install the next release. Snapshots persist
+                      and offers to reboot.
+  list                Show available and installed versions
+                      (passthrough to systemd-sysupdate list).
+  experiment          Enter experiment mode (not yet implemented).
+  snapshot [name]     Manually snapshot persist (not yet implemented).
+  restore <id>        Restore a persist snapshot (not yet implemented).
+
+See README → Updates & experiment mode.
+EOF
+    exit 2
+}
+
+case "${1:-}" in
+    update)
+        shift
+        # shellcheck source=/dev/null
+        . "$LIB/cmd-update.sh"
+        cmd_update "$@"
+        ;;
+    list)
+        shift
+        # Pure passthrough — sysupdate's own output is fine. Also serves
+        # as a quick "is the transfer config valid + can we reach dufs?"
+        # smoke test. Absolute path: systemd-sysupdate is a systemd
+        # internal helper at /usr/lib/systemd/, not on $PATH.
+        # --verify=no: see cmd-update.sh / README → Architecture.
+        exec /usr/lib/systemd/systemd-sysupdate --verify=no list "$@"
+        ;;
+    experiment|snapshot|restore)
+        die "$1: not yet implemented (see README → Updates & experiment mode)"
+        ;;
+    -h|--help|help|"")
+        usage
+        ;;
+    *)
+        printf 'theatre-os: unknown command: %s\n' "$1" >&2
+        usage
+        ;;
+esac

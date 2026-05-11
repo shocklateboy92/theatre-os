@@ -28,11 +28,14 @@ moonlight-qt launches from within Kodi for game streaming.
 - **Runtime**: RO `@os/<v>` btrfs subvolume mounted directly at `/` —
   no overlayfs. Writes to `/usr` and most of `/etc` fail loudly,
   enforcing the discipline that config changes must be promoted to
-  the mkosi config. `/var`, `/home/kodi`, and a few `/etc` identity
-  files are bind-mounted from a per-version persist subvolume
-  (`@persist/<v>`). Experiments use a separate boot mode that
-  snapshots `@os/<v>` and `@persist/<v>` to writable throwaway
-  subvolumes — see "Updates & experiment mode".
+  the mkosi config. The data partition is mounted RW at
+  `/system/data` (sysupdate creates new subvolumes there at update
+  time); `/var`, `/home/kodi`, and a few `/etc` identity files are
+  bind-mounted from a per-version persist subvolume (`@persist/<v>`).
+  The ESP is mounted RW at `/efi` so `bootctl`, `kernel-install`, and
+  sysupdate's UKI transfer can write to it. Experiments use a separate
+  boot mode that snapshots `@os/<v>` and `@persist/<v>` to writable
+  throwaway subvolumes — see "Updates & experiment mode".
 - **Display**: Kodi runs gbm-direct (no compositor → refresh-rate
   switching works). moonlight-qt launches via Qt EGLFS/KMS, also
   compositor-free. Quit-and-relaunch handoff between them, same as
@@ -188,11 +191,13 @@ space flowing freely between them and simplifies the GPT. The blast
 radius of fs corruption covers both, but recovery requires AMT KVM +
 USB rescue regardless, so the isolation argument is weak.
 
-ESP is oversized at 2 GiB (UKIs are ~50–100 MB, retention ~10 versions
-= <1 GiB). Comfortably within FAT32/firmware tolerances; the headroom
-exists so we can experiment with alternate boot artefacts (recovery
-UKIs, debug variants, multi-profile UKIs) in future without
-re-partitioning. Shrinking later is annoying.
+ESP is oversized at 2 GiB (UKIs are ~100 MB, retention ~10 versions
+= ~1 GiB; see Build & publish for the `KernelInitrdModules=default`
+override that keeps UKIs in this range). Comfortably within
+FAT32/firmware tolerances; the headroom exists so we can experiment
+with alternate boot artefacts (recovery UKIs, debug variants,
+multi-profile UKIs) in future without re-partitioning. Shrinking
+later is annoying.
 
 No swap (HTPC has ample RAM; swap on btrfs is fiddly). No separate
 `/boot` partition — UKIs live directly in the ESP and systemd-boot
@@ -219,6 +224,18 @@ based on the version stamped into the UKI's `/usr/lib/os-release`.
 initrd and a small systemd-mount unit handle them, so the same image
 works on any host with a `theatreos-data`-labelled partition.)
 
+The ESP is mounted RW at `/efi` from the rootfs by a static `efi.mount`
+unit (`What=/dev/disk/by-label/ESP`). This mount is needed so
+`bootctl`, `kernel-install`, and `systemd-sysupdate` (whose UKI
+transfer file uses `PathRelativeTo=esp`) can find and write to the
+ESP — despite the man pages implying ESP discovery is automatic, in
+practice these tools just look for a mounted FAT volume at one of
+`/efi`, `/boot`, or `/boot/efi` and bail otherwise. We use an
+explicit `.mount` unit rather than `systemd-gpt-auto-generator`
+because the generator hangs `initrd-root-fs.target` waiting for a
+discoverable root partition we don't have (see the cmdline rationale
+in `mkosi.conf` and `rd.systemd.gpt_auto=0`).
+
 ## Persistence model
 
 The data partition holds **one persist subvolume per installed OS
@@ -240,7 +257,7 @@ from the running persist, never from a skeleton.
 
 Booting `<v>` is therefore a dumb mount: `@persist/<v>` always already
 exists. The version stamped into the booted UKI's `/usr/lib/os-release`
-selects which subvolume to mount.
+(`IMAGE_VERSION`) selects which subvolume to mount.
 
 `@persist/<v>` is a normal RW subvolume. Writes from a normal boot
 land in it directly and survive reboot — standard Linux semantics, no
@@ -437,37 +454,56 @@ snapshot and the experiment-mode guard. Roughly:
 theatre-os update:
   1. If running in experiment mode (root mount is on
      @os/<v>-experiment-<u>): refuse and exit.
-  2. Determine running version <r> from /etc/os-release.
-  3. systemd-sysupdate update      # downloads new tar+UKI, extracts
-                                   # to @os/<n>, drops UKI in ESP, GCs old @os
-  4. btrfs subvolume snapshot @persist/<r> @persist/<n>
-  5. GC orphan @persist/<x> where @os/<x> no longer exists.
-  6. Optionally reboot.
+  2. Determine running version <r> from /usr/lib/os-release
+     (IMAGE_VERSION; not VERSION_ID — that's a distro field
+     and is unset for rolling Arch).
+  3. Record the current @os subvol list (in a shell variable) before
+     sysupdate runs.
+  4. systemd-sysupdate --verify=no update
+                                   # downloads new tar+UKI, extracts
+                                   # to @os/<n>, drops UKI in ESP, GCs
+                                   # old @os per InstancesMax.
+                                   # --verify=no skips GPG signature
+                                   # check; SHA256 hashes from
+                                   # SHA256SUMS are still verified
+                                   # unconditionally per sysupdate.d(5).
+  5. Diff the @os list before/after to discover the new <n>.
+     (Robust to sysupdate's stdout format changes; we don't try to
+     parse human-readable progress text.)
+  6. btrfs subvolume snapshot @persist/<r> @persist/<n>
+  7. GC orphan @persist/<x> where @os/<x> no longer exists
+     (sysupdate doesn't know about persist subvols, so we run our
+     own paired GC).
+  8. Optionally reboot.
 ```
 
 The experiment-mode guard ensures `@persist/<n>` forks from the
 last-known-good persist (the running version's), not from an ephemeral
 experiment snapshot that won't exist after the next reboot.
 
-**`systemd-sysupdated` is masked at image build time.** sysupdate ships
-both a CLI (`systemd-sysupdate`) and a D-Bus daemon
+**Five sysupdate units are masked at image build time.** sysupdate
+ships both a CLI (`systemd-sysupdate`) and a D-Bus daemon
 (`systemd-sysupdated`). The daemon is what tools like Plasma's
 Discover, `updatectl`, etc. drive to perform updates. We don't want
 that — anything calling the `org.freedesktop.sysupdate1` D-Bus
 interface would invoke a sysupdate install directly, bypassing the
 `theatre-os update` wrapper and skipping both the experiment-mode
-guard and the persist snapshot. So the image masks
-`systemd-sysupdated.service` and `dbus-org.freedesktop.sysupdate1.service`.
+guard and the persist snapshot. So the image masks (symlinks to
+`/dev/null`):
+
+- `systemd-sysupdated.service` (the D-Bus daemon)
+- `dbus-org.freedesktop.sysupdate1.service` (the dbus alias for it)
+- `systemd-sysupdate.timer` (the periodic auto-update mechanism —
+  updates happen only when explicitly invoked by `theatre-os update`,
+  never on a schedule; an auto-update at 03:00 that breaks the box
+  is harder to debug than one the human just pushed)
+- `systemd-sysupdate-reboot.service` and `.timer` (the auto-reboot-
+  after-update mechanism — same reasoning).
+
 The CLI is the only entry point. (sysupdate has no native pre/post
 hooks — see [systemd#35988](https://github.com/systemd/systemd/issues/35988)
 — so a wrapper is the only way to compose snapshot logic with
 sysupdate.)
-
-The `systemd-sysupdate.timer` (the periodic auto-update mechanism)
-is also masked. Updates happen only when explicitly invoked by
-`theatre-os update`, never on a schedule. This is deliberate — an
-auto-update at 03:00 that breaks the box is harder to debug than one
-the human just pushed.
 
 ### Manual persist snapshots: `theatre-os snapshot` / `restore`
 
@@ -557,7 +593,12 @@ behaviour; the custom pieces are noted.
    before switch-root. Standard image-OS pattern (silverblue,
    microos, particleos all do this).
    - `sysroot-system-data.mount`: data partition root (subvolid=5)
-     at `/sysroot/system/data`
+     at `/sysroot/system/data`, **mounted RW** because sysupdate
+     creates new `@os/<v>` subvolumes there at update time, and
+     `theatre-os update` snapshots `@persist/<r>` → `@persist/<n>`
+     beside them. (The individual `@os/<v>` subvols are independently
+     RO; per-version isolation comes from the subvol RO flag, not from
+     the partition-root mount option.)
    - `sysroot-system-persist.mount`: `@persist/<v>` at
      `/sysroot/system/persist` (also `@VERSION@`-templated)
    - `sysroot-var.mount`: bind `/sysroot/system/persist/var` over
@@ -583,20 +624,31 @@ behaviour; the custom pieces are noted.
    `/proc/self/mountinfo` at startup and synthesizes mount units
    for them on the fly — no rootfs-side `.mount` units needed.
 
-6. **First-boot identity generation.** `sshdgenkeys.service` (Arch's
+6. **Rootfs-side mounts.** The rootfs's PID 1 brings up
+   `efi.mount`, mounting the ESP RW at `/efi` from
+   `/dev/disk/by-label/ESP`. This is needed so `bootctl`,
+   `kernel-install`, and `systemd-sysupdate` (whose UKI transfer
+   uses `PathRelativeTo=esp`) can write to it. Despite the
+   `sysupdate.d(5)` claim that `PathRelativeTo=esp` self-locates
+   the ESP, in practice these tools just look for it mounted at
+   `/efi`, `/boot`, or `/boot/efi` and bail otherwise.
+
+7. **First-boot identity generation.** `sshdgenkeys.service` (Arch's
    wrapper, with our drop-in overriding the path) generates host
    keys into `/var/lib/ssh/`. They land on the persist subvol via
    the inherited `/var` bind, so they survive reboots and
    rollbacks. `/etc/machine-id` is already populated by the time
    anything reads it (per step 4).
 
-7. **Normal systemd boot.** networkd, sshd, bluetoothd, etc.
+8. **Normal systemd boot.** networkd, sshd, bluetoothd, etc.
    `gpt_auto=0` is on the kernel cmdline to disable
    `systemd-gpt-auto-generator`, which would otherwise leak a
    dependency on `/dev/gpt-auto-root` and hang `initrd-root-fs.
    target` waiting for a discoverable root partition we don't have.
+   Side effect: the ESP isn't auto-mounted by the generator either,
+   which is why we ship the explicit `efi.mount` (step 6).
 
-8. **Kodi starts.** `kodi-gbm.service` (from Arch's
+9. **Kodi starts.** `kodi-gbm.service` (from Arch's
    `kodi-standalone-service` package) launches Kodi as user `kodi`
    against `/dev/dri/card0` via gbm/EGL/KMS, on tty1. The unit ships
    with `Conflicts=getty@tty1.service` upstream, so systemd
@@ -606,27 +658,52 @@ behaviour; the custom pieces are noted.
 
 ### Custom code summary
 
-Everything custom lives in the initrd subimage at
-`mkosi.images/initrd/`: the version-templated `sysroot.mount`, the
-five `sysroot-*` mount units (system-data, system-persist, var,
-etc-machine\x2did) and the `theatre-os-machine-id.service` oneshot.
-Plus the per-image `mkosi.finalize` that does the `@VERSION@`
-substitution.
+Initrd subimage (`mkosi.images/initrd/`):
+- The version-templated `sysroot.mount`, the four `sysroot-*` mount
+  units (system-data, system-persist, var, etc-machine\x2did) and
+  the `theatre-os-machine-id.service` oneshot.
+- Per-image `mkosi.finalize` doing `@VERSION@` substitution.
 
-The rootfs only contributes:
-- An empty 0-byte `/etc/machine-id` mountpoint stub (`mkosi.extra/`)
+Rootfs (`mkosi.extra/`):
+- An empty 0-byte `/etc/machine-id` mountpoint stub.
+- `efi.mount` + `local-fs.target.wants/efi.mount` symlink, mounting
+  the ESP at `/efi` for sysupdate / bootctl / kernel-install.
 - `sshd_config.d/10-theatreos.conf` redirecting `HostKey=` to
-  `/var/lib/ssh/`
+  `/var/lib/ssh/`.
 - `sshdgenkeys.service.d/10-theatreos-persist.conf` overriding
-  Arch's hardcoded keygen path to match
-- A symlink wanting sshd from `multi-user.target`
-- Top-level `mkosi.finalize` that creates the `/system/data` and
-  `/system/persist` mountpoint stubs (mkosi.extra would have
-  shipped them, but git can't track empty dirs).
+  Arch's hardcoded keygen path to match.
+- A symlink wanting sshd from `multi-user.target`.
+- The `theatre-os` CLI: dispatcher at `/usr/bin/theatre-os` plus
+  `lib.sh` and `cmd-update.sh` under `/usr/lib/theatre-os/` (one
+  file per verb; only `update` implemented; `experiment`,
+  `snapshot`, `restore` stubbed).
+- Sysupdate transfer files at `/usr/lib/sysupdate.d/`:
+  `10-rootfs.transfer` (`Type=url-tar` → `@os/<v>` subvol) and
+  `20-uki.transfer` (`Type=url-file` → ESP `/EFI/Linux/`).
+- Five symlinks to `/dev/null` masking sysupdate's daemon, dbus
+  alias, periodic timer, and reboot service+timer (so the
+  `theatre-os update` wrapper is the only entry point).
+
+Top-level `mkosi.finalize` creates the `/system/data`,
+`/system/persist`, and `/efi` mountpoint stubs in the rootfs's
+`$BUILDROOT` (mkosi.extra would have shipped them, but git can't
+track empty dirs).
+
+Top-level `mkosi.conf` sets `UnifiedKernelImageFormat=%i_%v` so the
+install-time UKI is named `theatre-os_<v>.efi` to match what
+sysupdate writes for update-time UKIs (mkosi's default `&e-&k`
+would name it after the kernel and leave it as an orphan that
+sysupdate's `InstancesMax` retention can't see — same approach
+particleos uses).
 
 Plus the partition layout in `mkosi.repart.in/10-data.conf.in`
 (declares subvolumes, pre-creates persist target dirs via
 `MakeDirectories=`, seeds `@persist/<v>/var` from rootfs `/var`).
+
+Plus the host-side scripts: `build.sh` (renders repart templates +
+invokes mkosi), `publish.sh` (uploads `.tar` + `.efi` +
+`SHA256SUMS` to dufs), `vacuum.sh` (deletes all but the last N
+versions from dufs).
 
 No generators, no overlayfs, no exotic machinery; total LoC small.
 
@@ -786,6 +863,30 @@ Notably we **do not** need to:
 
 mkosi and sysupdate are designed to compose; we lean on that.
 
+We do set `UnifiedKernelImageFormat=%i_%v` in `mkosi.conf` so the
+install-time UKI inside the disk image is named `theatre-os_<v>.efi`
+— matching what sysupdate writes for update-time UKIs. Without this
+override, mkosi defaults to `&e-&k` (entry-token + kernel version),
+which would leave a differently-named UKI in `/efi/EFI/Linux/` after
+install that sysupdate's `InstancesMax` retention can't see (it only
+manages files matching its `MatchPattern=theatre-os_@v.efi`). Same
+trick particleos uses (`UnifiedKernelImageFormat=%i_%v_%a`). We drop
+the architecture suffix since theatre-os only targets x86_64.
+
+We also set `KernelInitrdModules=default` to limit which kernel
+modules (and their firmware dependencies) end up in the initrd. The
+mkosi default — when the setting is unspecified — bundles **every**
+kernel module the running kernel exposes and **all** of their
+firmware dependencies, ballooning the UKI from ~100 MB to ~440 MB.
+The vast majority of that is Wi-Fi / GPU / sound / cellular firmware
+we don't need before switch-root. With our `InstancesMax=10`
+retention, an unconstrained UKI would use 4.4 GB of ESP space — more
+than the 2 GB ESP we provisioned. With `default` we get ~80 MB of
+modules-initrd (block devices, filesystems, the bare minimum to
+mount `@os/<v>` and switch-root), totalling ~107 MB UKI and ~1 GB
+of ESP usage at full retention — comfortably inside our budget.
+Same setting particleos uses.
+
 The rootfs tar is uncompressed. It's a few-hundred-MB tree on a gigabit
 LAN — wire time is seconds either way. If wire becomes an issue later,
 enable HTTP-level gzip on the dufs/static server (transparent to
@@ -804,8 +905,10 @@ exec date -u +%Y-%m-%d-%H%M
 
 mkosi runs it on every build and uses stdout as `ImageVersion=`. That
 value flows into the artefact filenames *and* `/usr/lib/os-release`'s
-`VERSION_ID=` in both the rootfs and the initrd image. One source of
-truth, no external stamping step.
+`IMAGE_VERSION=` in both the rootfs and the initrd image. (Not
+`VERSION_ID=` — that's the distro version field, which Arch leaves
+unset because it's rolling.) One source of truth, no external stamping
+step.
 
 ### Kernel cmdline is generic
 
@@ -813,7 +916,7 @@ The cmdline is the same string in every UKI we build (currently
 something like `quiet rw console=tty0 console=ttyS0,115200` —
 see Accounts & remote access for the SOL rationale). The version
 flows from `mkosi.version` into the artefact filenames *and* into
-`/usr/lib/os-release`'s `VERSION_ID=` in both the rootfs and the
+`/usr/lib/os-release`'s `IMAGE_VERSION=` in both the rootfs and the
 initrd image; the initrd reads it from there to pick `@os/<v>` /
 `@persist/<v>`. Same pattern as KDE Linux's mount-generator.
 
@@ -870,10 +973,20 @@ audio / BT / AMT.
 ### `publish.sh`
 
 Discovers the version from the local SHA256SUMS file (mkosi just wrote
-it; we don't need to ask mkosi.version again). Fetches the existing
-master SHA256SUMS from dufs (if any), appends our entries, uploads
-everything. Order matters: SHA256SUMS last so consumers don't see a
+it; we don't need to ask mkosi.version again). Filters out `.raw` (it's
+install-only and stays on the build host — see "Initial install" for
+the rationale). PUTs each artefact to its full URL on dufs (not the
+directory: dufs returns 404 for `PUT /<dir>/` even though curl supports
+that form for other WebDAV servers). MKCOLs the device subdirectory
+first, idempotently, in case it doesn't exist yet (dufs's docs claim
+parent-dir auto-creation on PUT but in practice it doesn't). Fetches
+the existing master SHA256SUMS from dufs (if any), appends our entries,
+uploads merged. Order matters: SHA256SUMS last so consumers don't see a
 stale checksum file mid-upload.
+
+dufs at `push.apps.lasath.com` is open for PUT inside the LAN trust
+boundary; no auth needed (LAN-only DNS, single trust boundary — see
+Architecture → Distribution).
 
 ```sh
 #!/bin/sh
@@ -883,16 +996,27 @@ PUSH="https://push.apps.lasath.com/theatre-t480"
 PULL="https://static.apps.lasath.com/sysupdate/theatre-t480"
 
 # Local SHA256SUMS lists exactly what mkosi built this run.
-LOCAL_SUMS="$(ls mkosi.output/theatre-os_*.SHA256SUMS)"
+LOCAL_SUMS="$(ls mkosi.output/theatre-os_*.SHA256SUMS | tail -n1)"
 
-# Upload artefacts referenced in the local sums file.
-awk '{print $2}' "$LOCAL_SUMS" | while read -r f; do
-  curl -fT "mkosi.output/$f" "$PUSH/"
+# Ensure the device subdir exists. Idempotent: 201 on create, 405 if
+# already there.
+curl -fsS -X MKCOL "$PUSH/" -o /dev/null || true
+
+# Upload artefacts referenced in the local sums file. sha256sum's
+# binary-mode output prefixes filenames with `*`; strip it.
+awk '{sub(/^\*/, "", $2); print $2}' "$LOCAL_SUMS" | while read -r f; do
+  case "$f" in
+    *.tar|*.efi)
+      curl -fT "mkosi.output/$f" "$PUSH/$f"   # full file URL, not /
+      ;;
+  esac
 done
 
-# Merge with whatever's already on dufs, then upload.
-{ curl -fsS "$PULL/SHA256SUMS" 2>/dev/null || true; cat "$LOCAL_SUMS"; } \
-  | sort -u > /tmp/SHA256SUMS.merged
+# Merge with whatever's already on dufs, then upload. Filter out .raw
+# from the local sums so the published index matches what's fetchable.
+{ curl -fsS "$PULL/SHA256SUMS" 2>/dev/null || true
+  grep -E '\.(tar|efi)$' "$LOCAL_SUMS"
+} | sort -u > /tmp/SHA256SUMS.merged
 curl -fT /tmp/SHA256SUMS.merged "$PUSH/SHA256SUMS"
 
 echo "Published"
@@ -901,7 +1025,53 @@ echo "Published"
 Idempotent: re-running for the same build is a no-op (PUT replaces with
 identical bytes; `sort -u` keeps no duplicates).
 
-The only script we ship.
+### `vacuum.sh`
+
+Trim dufs to keep only the last N versions. Without this, dufs
+accumulates artefacts forever; eventually that's annoying. Default
+N=20 = 2x the on-box `InstancesMax=10`, so the server keeps history
+slightly longer than any one box does (a box that's been off for a
+while can still find an intermediate version).
+
+Runs ad-hoc, not as part of every publish — different blast radius.
+`publish.sh` is fast and idempotent; `vacuum.sh` is destructive.
+
+Order matters: delete artefacts first, then rewrite SHA256SUMS. If
+interrupted between the two, consumers see SHA256SUMS pointing at
+deleted files → sysupdate retries cleanly. Reverse order would leave
+orphan artefacts referenced by no checksum; harmless but messier.
+
+```sh
+#!/bin/sh
+# usage: vacuum.sh [N]   (default 20)
+set -eu
+N="${1:-20}"
+PUSH="https://push.apps.lasath.com/theatre-t480"
+PULL="https://static.apps.lasath.com/sysupdate/theatre-t480"
+
+versions=$(curl -fsS "$PULL/SHA256SUMS" \
+  | awk '{print $2}' \
+  | grep -oE 'theatre-os_[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}' \
+  | sort -u)
+
+to_delete=$(printf '%s\n' "$versions" | head -n "-$N")
+keep=$(printf '%s\n' "$versions" | tail -n "$N")
+[ -z "$to_delete" ] && { echo "Nothing to vacuum"; exit 0; }
+
+for v in $to_delete; do
+  for ext in tar efi; do
+    curl -fsS -X DELETE "$PUSH/$v.$ext" || true
+  done
+done
+
+# Rewrite SHA256SUMS with only the kept entries.
+keep_pat=$(printf '%s\n' "$keep" | paste -sd'|' -)
+curl -fsS "$PULL/SHA256SUMS" | grep -E "($keep_pat)" > /tmp/SHA256SUMS.vac
+curl -fT /tmp/SHA256SUMS.vac "$PUSH/SHA256SUMS"
+```
+
+The two scripts (`publish.sh` and `vacuum.sh`) are the only host-side
+glue we ship.
 
 ### Pull-side: sysupdate transfer files
 
@@ -914,7 +1084,6 @@ the same `@v` so sysupdate treats them as one update transaction:
 Type=url-tar
 Path=https://static.apps.lasath.com/sysupdate/theatre-t480/
 MatchPattern=theatre-os_@v.tar
-Verify=no
 
 [Target]
 Type=subvolume
@@ -930,22 +1099,29 @@ InstancesMax=10
 Type=url-file
 Path=https://static.apps.lasath.com/sysupdate/theatre-t480/
 MatchPattern=theatre-os_@v.efi
-Verify=no
 
 [Target]
 Type=regular-file
-Path=/efi/EFI/Linux/
+Path=/EFI/Linux/
+PathRelativeTo=esp
 MatchPattern=theatre-os_@v.efi
 InstancesMax=10
 ```
 
-The path namespaces by host (`theatre-t480/`) even though there's only
-one box; cheap insurance in case we ever want a second target later.
+The `Path=` namespaces by host (`theatre-t480/`) even though there's
+only one box; cheap insurance in case we ever want a second target later.
 
-`Verify=` defaults to `yes` (require GPG-signed `SHA256SUMS.gpg`).
-We set `Verify=no` per source: SHA256 hashes from `SHA256SUMS` are
-still checked unconditionally against the downloaded payload (per
-`sysupdate.d(5)`), so transport corruption is caught; only the GPG
+`PathRelativeTo=esp` requires the ESP to be mounted at one of the
+canonical paths (`/efi`, `/boot`, `/boot/efi`) — see Boot sequence,
+step 6, for the explicit `efi.mount` we ship.
+
+**No `Verify=` directive.** Older sysupdate had a `Verify=no` key for
+disabling GPG signature verification. Modern systemd (260+) removed it
+from `sysupdate.d` files; the equivalent is the `--verify=no` flag
+passed at invocation time, which the `theatre-os update` wrapper
+includes. SHA256 hashes from `SHA256SUMS` are still verified
+unconditionally regardless of `--verify=` — that's a separate code path
+in sysupdate. So transport corruption is caught; only the GPG
 signature step is skipped — see Architecture → Distribution.
 
 ### CI later (not now)
@@ -986,18 +1162,23 @@ is the install media.
 ```
 mkosi.conf                            # all top-level mkosi config
                                       #   (Format=disk, package list,
-                                      #   kernel cmdline, etc.)
+                                      #   kernel cmdline,
+                                      #   UnifiedKernelImageFormat=, etc.)
 mkosi.version                         # executable, prints date stamp
 mkosi.extra/                          # files overlaid onto the rootfs:
                                       #   sshd config drop-ins, root
                                       #   SSH pubkeys, the empty
                                       #   /etc/machine-id mountpoint
-                                      #   stub, sshdgenkeys override.
-mkosi.finalize                        # creates /system/data and
-                                      #   /system/persist mountpoint
-                                      #   stubs in $BUILDROOT (mkosi.
-                                      #   extra can't track empty
-                                      #   dirs cleanly).
+                                      #   stub, sshdgenkeys override,
+                                      #   efi.mount + local-fs target
+                                      #   wants, sysupdate transfer
+                                      #   files, sysupdate /dev/null
+                                      #   masks, the theatre-os CLI.
+mkosi.finalize                        # creates /system/data,
+                                      #   /system/persist, and /efi
+                                      #   mountpoint stubs in
+                                      #   $BUILDROOT (mkosi.extra
+                                      #   can't track empty dirs cleanly).
 mkosi.repart.in/                      # repart configs, with @VERSION@
                                       #   placeholders. Source of truth.
   00-esp.conf
@@ -1024,6 +1205,7 @@ build.sh                              # build entry point at the repo
                                       #   directly.
 publish.sh                            # uploads sysupdate artefacts to
                                       #   dufs (the .raw stays local).
+vacuum.sh                             # trims dufs to last N versions.
 ```
 
 The only `mkosi.images/` subimage we need is the custom initrd. The
@@ -1161,9 +1343,12 @@ publish → Local testing.)
    subimage; version stamping happens via `mkosi.images/initrd/
    mkosi.finalize`. Disk from step 2 now boots end-to-end in
    `mkosi vm`. Verify first-boot grow at the same time.
-4. Add systemd-sysupdate + `theatre-os update` wrapper. Test by
-   `mkosi serve`-ing a second build and running an update inside
-   the VM from step 3.
+4. ✅ Add systemd-sysupdate + `theatre-os update` wrapper, plus
+   `publish.sh` (push to dufs) and `vacuum.sh` (trim to last N).
+   Validated end-to-end: build A, publish, install in fresh VM,
+   build B, publish, `theatre-os update` inside VM, reboot, confirm
+   on B; pick A from systemd-boot menu, reboot, confirm rollback;
+   run `vacuum.sh 1`, confirm dufs trimmed.
 5. Port LibreELEC tweaks (BT/WOL/power-key/wake-chime) → systemd units
    in image.
 6. Bring up on T480 via AMT KVM + `dd` of installer image. Stage at

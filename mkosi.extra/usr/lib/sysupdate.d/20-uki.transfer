@@ -1,0 +1,23 @@
+# theatre-os UKI transfer for systemd-sysupdate.
+#
+# Pulls theatre-os_<v>.efi and drops it into the ESP at /efi/EFI/Linux/.
+# systemd-boot enumerates EFI/Linux/*.efi automatically, so the new entry
+# appears in the boot menu on next boot.
+#
+# Paired with 10-rootfs.transfer: same @v.
+
+[Source]
+Type=url-file
+Path=https://static.apps.lasath.com/sysupdate/theatre-t480/
+MatchPattern=theatre-os_@v.efi
+
+[Target]
+Type=regular-file
+# PathRelativeTo=esp lets sysupdate locate the ESP itself (via the
+# standard GPT ESP GUID) rather than requiring /efi to be mounted at
+# runtime. Per README → Boot sequence: nothing on the running system
+# needs the ESP mounted, so we don't.
+Path=/EFI/Linux/
+PathRelativeTo=esp
+MatchPattern=theatre-os_@v.efi
+InstancesMax=10

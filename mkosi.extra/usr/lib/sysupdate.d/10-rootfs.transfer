@@ -1,0 +1,31 @@
+# theatre-os rootfs transfer for systemd-sysupdate.
+#
+# Pulls theatre-os_<v>.tar from the homelab dufs instance and extracts it
+# into a fresh RO btrfs subvolume at /system/data/@os/<v>.
+#
+# Paired with 20-uki.transfer: same @v, sysupdate treats them as one update
+# transaction. See README → Architecture → Distribution and
+# README → Build & publish → Pull-side.
+#
+# Verify=no skips the GPG-signature step only; SHA256SUMS is still checked
+# unconditionally per sysupdate.d(5). See README → Architecture → Distribution
+# for the no-signing rationale (single LAN trust boundary).
+
+# Verification (signature checking) is controlled per-invocation via
+# `--verify=no` passed by the theatre-os wrapper, not in this file.
+# `Verify=` was removed/renamed in modern systemd (260+) and the
+# config-file directive is no longer recognised. SHA256 checksums in
+# SHA256SUMS are verified unconditionally regardless. See README →
+# Architecture → Distribution.
+
+[Source]
+Type=url-tar
+Path=https://static.apps.lasath.com/sysupdate/theatre-t480/
+MatchPattern=theatre-os_@v.tar
+
+[Target]
+Type=subvolume
+Path=/system/data/@os/
+MatchPattern=@v
+ReadOnly=yes
+InstancesMax=10

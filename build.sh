@@ -19,6 +19,24 @@ cd "$(dirname "$0")"
 
 VERSION="$(./mkosi.version)"
 
+# Discover the git SHA so it can flow through to the running OS's
+# /usr/lib/os-release as THEATREOS_GIT_SHA. Lets us trace any
+# running version back to the source. -dirty suffix if the worktree
+# has uncommitted changes (so we don't claim a dev build is the same
+# as the committed SHA it nominally derives from). If the build is
+# happening outside a git checkout (e.g. CI from a tarball), fall
+# back to "unknown" rather than failing the build.
+if git rev-parse --verify HEAD >/dev/null 2>&1; then
+    sha=$(git rev-parse --short=12 HEAD)
+    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+        sha="${sha}-dirty"
+    fi
+    THEATREOS_GIT_SHA=$sha
+else
+    THEATREOS_GIT_SHA=unknown
+fi
+export THEATREOS_GIT_SHA
+
 # Render *.in templates from mkosi.repart.in/ into mkosi.repart/,
 # substituting @VERSION@. Static .conf files in the same template dir
 # are copied verbatim. Output dir is gitignored.
@@ -51,4 +69,8 @@ if [ "$#" -eq 0 ]; then
         set -- build
 fi
 
-exec sudo mkosi "$@"
+# --preserve-env=THEATREOS_GIT_SHA: sudo strips environment variables
+# by default. mkosi.conf has Environment=THEATREOS_GIT_SHA which says
+# "pass through whatever the host has", but only if the host's value
+# survives sudo first. The narrow allowlist (one var) is safer than -E.
+exec sudo --preserve-env=THEATREOS_GIT_SHA mkosi "$@"

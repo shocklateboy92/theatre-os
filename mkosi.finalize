@@ -7,7 +7,23 @@
 #
 # These mountpoints are populated at boot by the corresponding
 # sysroot-* mount units shipped in the initrd subimage.
+#
+# Also append THEATREOS_GIT_SHA to /usr/lib/os-release so a running
+# OS can be traced back to its source commit. The SHA is discovered
+# on the host by build.sh and flows in via Environment= in mkosi.conf.
 
 set -eu
 
 mkdir -p "$BUILDROOT/system/data" "$BUILDROOT/system/persist" "$BUILDROOT/efi" "$BUILDROOT/home/kodi"
+
+# Append THEATREOS_GIT_SHA to the rootfs's os-release. mkosi has
+# already populated this file with NAME, IMAGE_ID, IMAGE_VERSION,
+# etc. by the time finalize runs. Quote the value so any unusual
+# chars (e.g. -dirty suffix) don't trip up the shell-grammar parser
+# that consumers (us in lib.sh, systemd, etc.) use.
+#
+# Falls back to "unknown" if the env var isn't set (build.sh would
+# normally set it, but be tolerant of someone running mkosi directly
+# in a non-git context).
+sha="${THEATREOS_GIT_SHA:-unknown}"
+printf 'THEATREOS_GIT_SHA="%s"\n' "$sha" >> "$BUILDROOT/usr/lib/os-release"

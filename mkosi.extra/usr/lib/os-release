@@ -1,0 +1,34 @@
+# theatre-os identity. Replaces the Arch base layer's os-release.
+#
+# mkosi appends IMAGE_ID= and IMAGE_VERSION= to this file during the
+# build (from ImageId= / mkosi.version), and mkosi.finalize then
+# sources the result and appends BUILD_ID= (the git SHA) and a
+# computed PRETTY_NAME= that interpolates IMAGE_VERSION + BUILD_ID.
+#
+# Field semantics per os-release(5)
+# (https://www.freedesktop.org/software/systemd/man/os-release.html):
+#
+#   NAME         display name, no version
+#   ID           machine identifier (lower-case, [a-z0-9._-])
+#   ID_LIKE      upstream(s); we derive from Arch, so consumers that
+#                only know "arch" still match via the ID_LIKE fallback
+#   VARIANT*     human + machine tags for the edition
+#   ANSI_COLOR   console color when printing the OS name (purple)
+#   HOME_URL     etc. — point at the theatre-os repo, not Arch
+#
+# IMAGE_ID/IMAGE_VERSION (image-based-OS fields, spec §"Information
+# about the version of the operating system") are the right way to
+# version a comprehensive image like ours; we deliberately do NOT
+# set VERSION/VERSION_ID because the underlying Arch is rolling.
+
+NAME="Theatre OS"
+ID=theatre-os
+ID_LIKE=arch
+VARIANT="HTPC"
+VARIANT_ID=htpc
+ANSI_COLOR="0;35"
+HOME_URL="https://github.com/shocklateboy92/theatre-os"
+DOCUMENTATION_URL="https://github.com/shocklateboy92/theatre-os/blob/main/README.md"
+BUG_REPORT_URL="https://github.com/shocklateboy92/theatre-os/issues"
+VENDOR_NAME="Lasath"
+VENDOR_URL="https://github.com/shocklateboy92"

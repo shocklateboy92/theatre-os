@@ -162,9 +162,9 @@ Image version = build datetime, UTC, minute resolution: `2026-05-09-1422`.
   and mkosi reads its stdout. Practically never collides.
 - Human-readable in the systemd-boot menu: you can tell at a glance
   which entry is newer when troubleshooting.
-- Git SHA is recorded separately in `/etc/os-release` (`THEATREOS_GIT_SHA=`)
-  for source traceability. The version itself doesn't embed the SHA
-  because SHAs don't sort meaningfully.
+- Git SHA is recorded separately in `/etc/os-release` as the
+  spec-blessed `BUILD_ID=` field for source traceability. The version
+  itself doesn't embed the SHA because SHAs don't sort meaningfully.
 
 Artifacts use the version as their stem:
 `theatre-os_2026-05-09-1422.tar`, `theatre-os_2026-05-09-1422.efi`.

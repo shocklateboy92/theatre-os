@@ -8,22 +8,42 @@
 # These mountpoints are populated at boot by the corresponding
 # sysroot-* mount units shipped in the initrd subimage.
 #
-# Also append THEATREOS_GIT_SHA to /usr/lib/os-release so a running
-# OS can be traced back to its source commit. The SHA is discovered
-# on the host by build.sh and flows in via Environment= in mkosi.conf.
+# Also finalize /usr/lib/os-release: stamp the git SHA into the
+# spec-blessed BUILD_ID= field, and synthesize PRETTY_NAME= that
+# interpolates IMAGE_VERSION (mkosi-set, from mkosi.version) and
+# BUILD_ID. The static identity fields (NAME, ID, ID_LIKE, *_URL,
+# etc.) come from mkosi.extra/usr/lib/os-release. The git SHA is
+# discovered on the host by build.sh and flows in via Environment=
+# in mkosi.conf.
 
 set -eu
 
 mkdir -p "$BUILDROOT/system/data" "$BUILDROOT/system/persist" "$BUILDROOT/efi" "$BUILDROOT/home/kodi"
 
-# Append THEATREOS_GIT_SHA to the rootfs's os-release. mkosi has
-# already populated this file with NAME, IMAGE_ID, IMAGE_VERSION,
-# etc. by the time finalize runs. Quote the value so any unusual
-# chars (e.g. -dirty suffix) don't trip up the shell-grammar parser
-# that consumers (us in lib.sh, systemd, etc.) use.
+# By finalize time mkosi has appended IMAGE_ID= / IMAGE_VERSION= to
+# our mkosi.extra/usr/lib/os-release. Source it to pull IMAGE_VERSION
+# in for PRETTY_NAME interpolation, then append the dynamic fields.
+# Quote values so unusual chars (e.g. a -dirty suffix on the SHA)
+# don't trip up the shell-grammar parser that consumers (us in
+# lib.sh, systemd, Kodi, etc.) use.
+#
+# BUILD_ID is the spec field for "uniquely identifying the system
+# image", explicitly intended for this exact purpose (see
+# os-release(5)). It supersedes the previous custom
+# THEATREOS_GIT_SHA= key — well-known fields are preferable so
+# generic tooling picks them up.
 #
 # Falls back to "unknown" if the env var isn't set (build.sh would
 # normally set it, but be tolerant of someone running mkosi directly
 # in a non-git context).
+
+# shellcheck disable=SC1091  # built file, not present in repo
+. "$BUILDROOT/usr/lib/os-release"
+
 sha="${THEATREOS_GIT_SHA:-unknown}"
-printf 'THEATREOS_GIT_SHA="%s"\n' "$sha" >> "$BUILDROOT/usr/lib/os-release"
+ver="${IMAGE_VERSION:-unknown}"
+
+{
+    printf 'BUILD_ID="%s"\n' "$sha"
+    printf 'PRETTY_NAME="Theatre OS %s (%s)"\n' "$ver" "$sha"
+} >> "$BUILDROOT/usr/lib/os-release"

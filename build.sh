@@ -19,6 +19,33 @@ cd "$(dirname "$0")"
 
 VERSION="$(./mkosi.version)"
 
+# Prune old artefacts in mkosi.output/ — each build produces ~11 GiB
+# of output (.raw + .tar + .efi + .SHA256SUMS) and they accumulate.
+# Keep the most recent N-1 strictly-older builds so the previous
+# known-working .raw is still on disk if this build fails or we want
+# to compare. The build we're about to do replaces the Nth slot.
+#
+# Date-based version stamps sort lexicographically as time order, so
+# `sort` puts oldest first; `head -n -K` drops the K newest.
+LOCAL_RETAIN=2
+existing=$(ls mkosi.output/theatre-os_*.SHA256SUMS 2>/dev/null \
+    | sed 's|.*/theatre-os_\(.*\)\.SHA256SUMS|\1|' \
+    | grep -v "^$VERSION$" \
+    | sort -u)
+# Keep the (LOCAL_RETAIN - 1) NEWEST of the strictly-older builds;
+# drop everything else. (We're about to write the new build, which
+# fills the Nth retention slot.)
+to_drop=$(printf '%s\n' "$existing" | head -n "-$((LOCAL_RETAIN - 1))" || true)
+for v in $to_drop; do
+    [ -n "$v" ] || continue
+    echo "build.sh: pruning local mkosi.output/theatre-os_$v.*"
+    sudo rm -f mkosi.output/theatre-os_"$v".raw \
+                mkosi.output/theatre-os_"$v".tar \
+                mkosi.output/theatre-os_"$v".efi \
+                mkosi.output/theatre-os_"$v".SHA256SUMS \
+                mkosi.output/theatre-os_"$v"
+done
+
 # Discover the git SHA so it can flow through to the running OS's
 # /usr/lib/os-release as THEATREOS_GIT_SHA. Lets us trace any
 # running version back to the source. -dirty suffix if the worktree

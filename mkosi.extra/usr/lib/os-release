@@ -14,7 +14,13 @@
 #                only know "arch" still match via the ID_LIKE fallback
 #   VARIANT*     human + machine tags for the edition
 #   ANSI_COLOR   console color when printing the OS name (purple)
-#   HOME_URL     etc. — point at the theatre-os repo, not Arch
+#   HOME_URL     etc. -- point at the theatre-os repo, not Arch
+#
+# Keep this file 7-bit ASCII. The spec allows UTF-8, but Kodi's
+# bundled service.xbmc.versioncheck addon ships an old distro.py
+# that opens os-release with Python's locale codec (ASCII in the
+# kodi-gbm session), and chokes on any multi-byte sequence -- even
+# inside a comment. Bit them once with an em-dash here.
 #
 # IMAGE_ID/IMAGE_VERSION (image-based-OS fields, spec §"Information
 # about the version of the operating system") are the right way to

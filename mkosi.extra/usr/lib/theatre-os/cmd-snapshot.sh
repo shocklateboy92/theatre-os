@@ -65,6 +65,25 @@ cmd_snapshot_take() {
         die "snapshot name must match [a-zA-Z0-9_-]+ (got: $name)"
     fi
 
+    # Refuse from experiment mode. running_version() reads
+    # IMAGE_VERSION from /usr/lib/os-release, which was baked at
+    # image build time and is unaware of the experiment-mode rename.
+    # So we'd snapshot @persist/<v> (the pristine fresh-for-next-boot
+    # subvol), NOT @persist/<v>-experiment-<u> (what we're actually
+    # mutating). The result would be a silently-wrong snapshot
+    # capturing pristine state with a misleading name, and the
+    # in-experiment mutations would only exist in the throwaway
+    # forensic subvol.
+    #
+    # The principled position: experiment mode is for throwaway
+    # testing. To keep changes, edit mkosi.extra/ in the repo and
+    # ship a new image (the iteration loop). If you want to
+    # checkpoint persist for restore-later, do it BEFORE entering
+    # experiment mode.
+    if is_experiment_mode; then
+        die "refusing to snapshot from experiment mode (would capture pristine state, not your in-experiment changes; reboot to leave first)"
+    fi
+
     running=$(running_version)
     ts=$(date -u +%Y-%m-%d-%H%M)
     base="${running}${THEATRE_SNAPSHOT_PREFIX}${ts}"

@@ -48,6 +48,12 @@ vm_ssh 'echo "PERSIST_EXP" > /home/kodi/EXPERIMENT_PERSIST_MARKER'
 out=$(vm_ssh 'cat /etc/motd 2>&1')
 assert_match "$out" 'EXPERIMENT MODE' "motd advertises experiment mode"
 
+# ---- snapshot refuses while in experiment mode ----
+# (would silently capture pristine state, not the in-experiment
+# state — the subtle footgun is documented in cmd-snapshot.sh)
+out=$(vm_ssh 'theatre-os snapshot from_experiment 2>&1' || true)
+assert_match "$out" 'refusing to snapshot from experiment mode' "snapshot refuses from experiment mode"
+
 # ---- Reboot to leave ----
 vm_reboot
 

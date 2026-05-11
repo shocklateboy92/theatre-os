@@ -391,7 +391,7 @@ The `theatre-os` CLI is the single entry point for all of this:
 |---|---|
 | `theatre-os update` | Pull the next release: invoke sysupdate, snapshot persist, paired GC. Refuses if in experiment mode. |
 | `theatre-os experiment` | Enter experiment mode live (no reboot): swap-snapshot `@os/<v>` and `@persist/<v>`, flip `/` to RW. Reboot to leave. |
-| `theatre-os snapshot [name]` | Manually snapshot persist for a checkpoint before risky persist mutations. |
+| `theatre-os snapshot [name]` | Manually snapshot persist for a checkpoint before risky persist mutations. Refuses if in experiment mode. |
 | `theatre-os snapshot list` | Show manual snapshots. |
 | `theatre-os snapshot delete <id>` | Drop a manual snapshot. |
 | `theatre-os snapshot prune` | Drop snapshots older than 30 days, with confirm. |
@@ -467,15 +467,19 @@ mount to switch to it. Verified empirically with both `subvol=` and
 `subvolid=` mount options — neither switches the live view on a
 rename + new-create at the original path.
 
-**Snapshots taken inside experiment mode persist past reboot.** btrfs
-subvols always live at the partition root regardless of which subvol
-you're operating from, so a `theatre-os snapshot foo` invoked while
-in experiment mode creates a real on-disk subvol that survives the
-reboot-to-leave-experiment. Useful: lets you checkpoint persist state
-mid-experiment if you mutate it in a way you might want to roll
-forward to. Note: those snapshots are forks of the **experiment-mode
-persist**, not the original — they reflect whatever state persist
-was in at snapshot time, including experiment-mode writes.
+**`theatre-os snapshot` refuses while in experiment mode.** It would
+silently capture the wrong subvol: `running_version()` reads
+`IMAGE_VERSION` from `/usr/lib/os-release` (baked at build time,
+unaware of the experiment-mode rename), so it'd snapshot
+`@persist/<v>` (the pristine fresh-for-next-boot subvol) rather than
+`@persist/<v>-experiment-<u>` (the one we're actually mutating). The
+snapshot would have a misleading name and miss the in-experiment
+state — a future `restore` against it would land you on pristine
+state, not what you thought you captured. Same refusal pattern as
+`update` and `restore`. To checkpoint persist before risky work in
+experiment mode, snapshot **before** entering experiment mode. To
+keep changes from experiment mode, edit `mkosi.extra/` in the repo
+and ship a new image (the iteration loop).
 
 ### `theatre-os update`
 

@@ -449,11 +449,33 @@ If you want to keep something from an experiment: edit the mkosi
 config in this repo and ship a new image. Same discipline as the
 iteration loop.
 
-**Caveat — needs prototyping in a VM.** The `mount -o remount,rw /`
-on a btrfs subvol whose `ro` property was just flipped is the part we
-want to verify works cleanly across the kernel versions we'll target.
-The mechanism is sound in principle; in practice there may be edge
-cases (the kernel may cache RO state somewhere we need to nudge).
+**Validated.** The `mount -o remount,rw /` on a btrfs subvol whose
+`ro` property was just flipped works cleanly on systemd 260 / Linux
+7.0. End-to-end validation in qemu (rename → snapshot back → flip RW
+→ remount → write to /usr → reboot → land in fresh RO snapshot,
+write gone). Old experiment subvols stay around for forensic
+browsing; default retention is 10 (CoW makes them cheap on disk),
+older auto-GC'd at next experiment-on.
+
+**Subtle property of btrfs subvol mounts** that this design relies
+on: subvol mounts are **inode-tracked** (the kernel resolves the
+subvol object once at mount time and follows it regardless of path
+renames), NOT path-tracked. Renaming `@os/<v>` → `@os/<v>-experiment-<u>`
+leaves the live `/` attached to the same subvol object under its new
+name; subsequently creating a fresh `@os/<v>` does NOT cause the live
+mount to switch to it. Verified empirically with both `subvol=` and
+`subvolid=` mount options — neither switches the live view on a
+rename + new-create at the original path.
+
+**Snapshots taken inside experiment mode persist past reboot.** btrfs
+subvols always live at the partition root regardless of which subvol
+you're operating from, so a `theatre-os snapshot foo` invoked while
+in experiment mode creates a real on-disk subvol that survives the
+reboot-to-leave-experiment. Useful: lets you checkpoint persist state
+mid-experiment if you mutate it in a way you might want to roll
+forward to. Note: those snapshots are forks of the **experiment-mode
+persist**, not the original — they reflect whatever state persist
+was in at snapshot time, including experiment-mode writes.
 
 ### `theatre-os update`
 
@@ -691,9 +713,8 @@ Rootfs (`mkosi.extra/`):
   Arch's hardcoded keygen path to match.
 - A symlink wanting sshd from `multi-user.target`.
 - The `theatre-os` CLI: dispatcher at `/usr/bin/theatre-os` plus
-  `lib.sh` and `cmd-update.sh` under `/usr/lib/theatre-os/` (one
-  file per verb; only `update` implemented; `experiment`,
-  `snapshot`, `restore` stubbed).
+  `lib.sh` and `cmd-{update,snapshot,restore,experiment}.sh` under
+  `/usr/lib/theatre-os/` (one file per verb).
 - Sysupdate transfer files at `/usr/lib/sysupdate.d/`:
   `10-rootfs.transfer` (`Type=url-tar` → `@os/<v>` subvol) and
   `20-uki.transfer` (`Type=url-file` → ESP `/EFI/Linux/`).
@@ -1396,6 +1417,12 @@ publish → Local testing.)
    ever build Kodi ourselves to test experimental features). LibreELEC
    tweaks (BT/WOL/power-key/wake-chime) need real hardware to
    validate; deferred to phase 6.
+5.5 ✅ Implement the remaining `theatre-os` CLI verbs (snapshot,
+   restore, experiment) so we can master experimental mode and
+   recovery before touching real hardware. The README's "needs
+   prototyping" caveat for the live `mount -o remount,rw /` step in
+   experiment mode is now answered: the dance works cleanly. All
+   three verbs validated end-to-end in qemu.
 6. Bring up on T480 via AMT KVM + `dd` of installer image. Stage at
    `theatre-t480.home.lasath.com`, ZBook stays prod at `theatre`.
 7. Daily-drive on T480 in parallel with ZBook for 2 weeks; iterate.

@@ -1,10 +1,9 @@
 #!/bin/sh
 # theatre-os — single entry point for OS-level operations on a running box.
 #
-# All verbs other than `update` and `list` are stubs in this phase; see
-# README → Updates & experiment mode for the full surface. Adding a verb
-# means adding a `cmd-<verb>.sh` under /usr/lib/theatre-os/ and an arm
-# in the dispatcher below.
+# Adding a verb means adding a `cmd-<verb>.sh` under /usr/lib/theatre-os/
+# and an arm in the dispatcher below. Sub-verbs (e.g. `snapshot list`)
+# are dispatched inside the verb's command file, not here.
 #
 # We deliberately do NOT expose systemd-sysupdate directly: the daemon
 # and timer are masked in the image so this script is the only path
@@ -26,9 +25,14 @@ Commands:
                       and offers to reboot.
   list                Show available and installed versions
                       (passthrough to systemd-sysupdate list).
-  experiment          Enter experiment mode (not yet implemented).
-  snapshot [name]     Manually snapshot persist (not yet implemented).
-  restore <id>        Restore a persist snapshot (not yet implemented).
+  snapshot [name]     Manually snapshot persist for a checkpoint.
+    snapshot list       Show snapshots.
+    snapshot delete <id>  Drop one.
+    snapshot prune      Drop snapshots > 30 days old, with confirm.
+  restore <id>        Stage a persist snapshot to be active after the
+                      next boot. Reboot to apply.
+  experiment          Enter experiment mode (live, no reboot). Reboot to
+                      leave. Throwaway scratch for /usr / /etc edits.
 
 See README → Updates & experiment mode.
 EOF
@@ -51,8 +55,25 @@ case "${1:-}" in
         # --verify=no: see cmd-update.sh / README → Architecture.
         exec /usr/lib/systemd/systemd-sysupdate --verify=no list "$@"
         ;;
-    experiment|snapshot|restore)
-        die "$1: not yet implemented (see README → Updates & experiment mode)"
+    snapshot)
+        shift
+        # shellcheck source=/dev/null
+        . "$LIB/cmd-snapshot.sh"
+        cmd_snapshot "$@"
+        ;;
+    restore)
+        shift
+        # shellcheck source=/dev/null
+        . "$LIB/cmd-snapshot.sh"   # for resolve_snapshot
+        # shellcheck source=/dev/null
+        . "$LIB/cmd-restore.sh"
+        cmd_restore "$@"
+        ;;
+    experiment)
+        shift
+        # shellcheck source=/dev/null
+        . "$LIB/cmd-experiment.sh"
+        cmd_experiment "$@"
         ;;
     -h|--help|help|"")
         usage

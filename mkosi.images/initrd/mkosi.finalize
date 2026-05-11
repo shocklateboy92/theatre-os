@@ -1,0 +1,12 @@
+#!/bin/sh
+# Same logic as the top-level mkosi.finalize, applied to the initrd
+# rootfs. The initrd's sysroot.mount needs the @VERSION@ -> actual
+# version substitution to mount the right @os/<v> subvolume. Both
+# images run the same script (symlink? duplicate? just two files for
+# now — small enough.).
+
+set -eu
+
+find "$BUILDROOT/usr/lib/systemd/system" \
+        -maxdepth 1 -name '*.mount' -type f -print0 \
+| xargs -0 -r sed -i "s|@VERSION@|${IMAGE_VERSION}|g"

@@ -1,0 +1,34 @@
+# Mounts the theatre-os data partition (the btrfs that holds all
+# @os/<v> and @persist/<v> subvolumes) at /system/data. Mounted RO
+# at the partition root because we never write to the FS root —
+# only to specific subvolumes via their own mount units.
+#
+# Found by GPT label baked in at install time by repart (see
+# mkosi.repart.in/10-data.conf.in).
+#
+# !! KEEP IN SYNC with mkosi.images/initrd/mkosi.extra/usr/lib/
+# systemd/system/system-data.mount !!  The initrd is a sibling
+# subimage and doesn't inherit our top-level mkosi.extra/, so the
+# same unit needs to exist in both places.
+
+[Unit]
+Description=theatre-os data partition
+DefaultDependencies=no
+Conflicts=umount.target
+Before=local-fs.target umount.target
+
+[Mount]
+What=/dev/disk/by-label/theatreos-data
+Where=/system/data
+Type=btrfs
+# subvolid=5 is the btrfs filesystem root (the implicit top-level
+# subvolume that holds @os/, @persist/, and any other subvols).
+# Without this, btrfs would mount the DefaultSubvolume= configured
+# at format time — defaulting to whichever child subvol was marked
+# default — which would surprise debug paths like
+# `ls /system/data/` showing rootfs contents instead of the @os/
+# and @persist/ container directories.
+Options=ro,subvolid=5
+
+[Install]
+RequiredBy=local-fs.target initrd-root-fs.target

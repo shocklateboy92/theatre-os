@@ -1,0 +1,28 @@
+#!/bin/sh
+# mkosi.finalize — runs after package install, before the image is
+# sealed. Stamps the build's IMAGE_VERSION into placeholder files in
+# the rootfs that need it baked in (specifically: .mount units that
+# reference @os/<v> and @persist/<v> by literal subvolume name).
+#
+# Why a finalize hook instead of build.sh templating? mkosi.finalize
+# runs in the build sandbox with $BUILDROOT pointing at the rootfs
+# being assembled. Edits land in the throwaway buildroot, NOT the
+# source tree, so we can ship the placeholder files in mkosi.extra/
+# verbatim (no .in extension dance, no gitignore).
+#
+# (build.sh is still needed for repart configs because mkosi reads
+# those from the source tree before this script runs.)
+
+set -eu
+
+# Mountpoint stubs for the data + persist mounts (we don't ship these
+# via mkosi.extra/ because that would also copy a .gitignore stub into
+# the rootfs to make git track empty dirs, leaving runtime noise).
+mkdir -p "$BUILDROOT/system/data" "$BUILDROOT/system/persist"
+
+# Substitute @VERSION@ in any .mount unit shipped via mkosi.extra/.
+# Glob safely with find — there may be no matches if the unit set
+# changes in future.
+find "$BUILDROOT/usr/lib/systemd/system" \
+        -maxdepth 1 -name '*.mount' -type f -print0 \
+| xargs -0 -r sed -i "s|@VERSION@|${IMAGE_VERSION}|g"

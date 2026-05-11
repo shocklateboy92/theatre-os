@@ -1,0 +1,22 @@
+# /var ← /system/persist/var bind mount. Everything in /var
+# persists by default (matches normal Linux semantics; see README →
+# Persistence model → What's persistent).
+#
+# tmpfiles.d/theatreos-persist.conf ensures /system/persist/var
+# exists before this mount tries to attach.
+
+[Unit]
+Description=theatre-os /var bind mount
+DefaultDependencies=no
+Requires=system-persist.mount
+After=system-persist.mount
+Before=local-fs.target
+
+[Mount]
+What=/system/persist/var
+Where=/var
+Type=none
+Options=bind
+
+[Install]
+RequiredBy=local-fs.target

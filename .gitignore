@@ -1,2 +1,6 @@
-# Per-directory .gitignore files in mkosi.{output,cache,pkgcache,builddir}/
-# handle the "exist in repo, contents ignored" pattern.
+# Per-user / per-machine mkosi overrides — see mkosi(1) for the
+# mkosi.local.conf convention. Use this for things you want during
+# local dev (e.g. RootPassword= for VM console login) that should
+# NOT ship to the actual HTPC.
+mkosi.local.conf
+mkosi.local/

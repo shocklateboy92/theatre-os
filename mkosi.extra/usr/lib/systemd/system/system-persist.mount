@@ -1,0 +1,21 @@
+# Mounts the per-version persist subvolume (@persist/<v>) at
+# /system/persist. RW. The bind mounts in this directory (var.mount,
+# home-kodi.mount, etc.) all source from here.
+#
+# @VERSION@ is substituted at build time by mkosi.finalize.
+
+[Unit]
+Description=theatre-os persist (@persist/@VERSION@)
+DefaultDependencies=no
+Requires=system-data.mount
+After=system-data.mount
+Before=local-fs.target
+
+[Mount]
+What=/dev/disk/by-label/theatreos-data
+Where=/system/persist
+Type=btrfs
+Options=rw,subvol=/@persist/@VERSION@
+
+[Install]
+RequiredBy=local-fs.target

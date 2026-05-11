@@ -2,8 +2,8 @@
 # (RW per-version persist subvols). See README → Partition layout +
 # Persistence model.
 #
-# This file is a TEMPLATE: scripts/build.sh substitutes @VERSION@ with
-# the current build's version (from ./mkosi.version) before invoking
+# This file is a TEMPLATE: build.sh substitutes @VERSION@ with the
+# current build's version (from ./mkosi.version) before invoking
 # mkosi. Templating is needed because systemd-repart's Subvolumes=
 # directive doesn't expand specifiers (and Subvolumes= is the only
 # setting in this file that needs the version baked in). See README
@@ -13,30 +13,60 @@
 Type=linux-generic
 Label=theatreos-data
 Format=btrfs
-# Container directories for the versioned subvolumes. These are
-# plain dirs, not subvolumes themselves — they exist solely to be
-# the parent path under which sysupdate creates @os/<v> children
-# via Type=subvolume. Subvolumes= does not create parent
-# directories on its own (see repart.d(5)), hence MakeDirectories=.
-MakeDirectories=/@os /@persist
+
+# Container directories under which sysupdate later drops @os/<v>
+# subvolumes via Type=subvolume. Plain dirs, not subvolumes
+# themselves. Subvolumes= does not create parent directories on its
+# own (see repart.d(5)), hence MakeDirectories=.
+#
+# Also pre-create:
+#   /@os/<v>/var       — empty mountpoint stub for var.mount to
+#                        attach to. ExcludeFiles=/var below keeps
+#                        /var contents OUT of @os/<v>; this line
+#                        ensures the empty directory still exists.
+#   /@persist/<v>/var/lib/ssh — writable target for sshdgenkeys to
+#                        drop generated host keys into on first
+#                        boot. The rest of /var inside @persist/<v>
+#                        is populated by CopyFiles= further down.
+#
+# Repart applies CopyFiles= before MakeDirectories= regardless of
+# declaration order (see repart.d(5)), so MakeDirectories= can
+# safely fill in the gaps.
+MakeDirectories=/@os /@persist /@os/@VERSION@/var /@persist/@VERSION@/var /@persist/@VERSION@/var/lib /@persist/@VERSION@/var/lib/ssh
+
 Subvolumes=/@os/@VERSION@:ro /@persist/@VERSION@
-DefaultSubvolume=/@os/@VERSION@
 
-# Populate @os/<v> with the rootfs being built. CopyFiles auto-creates
-# parent dirs (so /@os/ and /@os/<v>/ exist before mkfs.btrfs converts
-# them to subvolumes per the Subvolumes= line above).
+# No DefaultSubvolume= — we always mount with explicit subvol= or
+# subvolid= options in our .mount units, so the btrfs default is
+# irrelevant. Leaving it unset means anyone who mounts the partition
+# without an explicit subvol gets the partition root (subvolid=5),
+# which is the saner default for debugging.
+
+# Populate @os/<v> with the rootfs being built, EXCEPT /var (which
+# lives exclusively in @persist/<v>/var via the next CopyFiles).
+# We avoid duplicating /var contents into @os/<v> because they'd
+# never be seen at runtime (var.mount bind-shadows them anyway), and
+# without the exclude repart would copy /var/lib/{dbus,systemd,…}
+# into @os/<v> wasting ~MBs per OS version on disk. MakeDirectories=
+# above ensures /@os/<v>/var still exists as an empty mountpoint
+# stub so var.mount has something to attach to.
+#
+# We use ExcludeFilesTarget= (destination-scoped) rather than
+# ExcludeFiles= (source-scoped). ExcludeFiles=/var would tell repart
+# "never copy /var from host into this partition" affecting BOTH
+# CopyFiles directives, breaking the /var → @persist/<v>/var seed
+# below. ExcludeFilesTarget= only affects copies whose destination
+# is the named path.
 CopyFiles=/:/@os/@VERSION@
+ExcludeFilesTarget=/@os/@VERSION@/var
 
-# @persist/@VERSION@ is created empty by Subvolumes= above, BUT
-# mkfs.btrfs's --subvol requires the directory to exist before it
-# can be converted to a subvolume. CopyFiles= covers that for the
-# /@os/ tree; for /@persist/ we have no files to copy (the persist
-# subvol starts empty), so explicitly pre-create the dirs.
-MakeDirectories=/@persist /@persist/@VERSION@
-
-# Specific paths needed for bind mounts (/var/log, /home/kodi,
-# /etc/ssh, /etc/machine-id, …) inside @persist/<v> are created by
-# systemd-tmpfiles on first boot (phase 3).
+# Seed @persist/<v>/var from the rootfs's /var/, so packages that
+# expect populated /var/lib/{dbus,systemd,…} on first boot find
+# their state intact after var.mount bind-attaches /system/persist/var
+# over /var. Avoids needing tmpfiles to recreate package state, and
+# avoids the previous ordering cycle (tmpfiles is After=local-fs.
+# target which is what var.mount feeds INTO).
+CopyFiles=/var:/@persist/@VERSION@/var
 
 # Keep the partition compact in the .raw artefact; first-boot
 # systemd-repart on the target grows it to fill the actual disk.

@@ -22,10 +22,11 @@
 # kodi-gbm session), and chokes on any multi-byte sequence -- even
 # inside a comment. Bit them once with an em-dash here.
 #
-# IMAGE_ID/IMAGE_VERSION (image-based-OS fields, spec §"Information
-# about the version of the operating system") are the right way to
-# version a comprehensive image like ours; we deliberately do NOT
-# set VERSION/VERSION_ID because the underlying Arch is rolling.
+# IMAGE_ID/IMAGE_VERSION (image-based-OS fields, spec section
+# "Information about the version of the operating system") are the
+# right way to version a comprehensive image like ours; we
+# deliberately do NOT set VERSION/VERSION_ID because the underlying
+# Arch is rolling.
 
 NAME="Theatre OS"
 ID=theatre-os

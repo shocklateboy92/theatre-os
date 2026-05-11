@@ -1,0 +1,40 @@
+# theatre-os: grow the data partition's btrfs filesystem to match
+# the partition size on every boot.
+#
+# Why this exists: systemd-repart at runtime grows the partition
+# (per /usr/lib/repart.d/10-data.conf) to fill the disk, but the
+# filesystem inside doesn't auto-grow. Normally systemd-growfs-
+# generator handles this by creating systemd-growfs@<mp>.service
+# units from GPT auto-discovery — but our data partition uses the
+# 'linux-generic' GPT type (not the discoverable root/usr types),
+# AND we explicitly disable systemd-gpt-auto-generator to avoid the
+# initrd-root-fs.target hang (see mkosi.conf cmdline rationale).
+#
+# So we just call systemd-growfs ourselves on every boot. Idempotent
+# and fast: it's a no-op when the filesystem is already at max
+# size (~5ms), so the runtime cost is negligible.
+#
+# After the first-boot grow this runs essentially for free; we keep
+# it on every boot rather than ConditionFirstBoot= because:
+#   - It self-recovers if a future event (replaced disk, repart
+#     re-application, etc.) leaves the FS smaller than the partition.
+#   - The "first boot" condition is fragile across our update model.
+
+[Unit]
+Description=Grow theatre-os data filesystem to partition size
+DefaultDependencies=no
+After=local-fs.target
+Before=basic.target
+# Don't run if we're somehow off our normal mount setup (rescue
+# env, debug shell, etc.). The path covers normal-mode boot AND
+# experiment mode (both have /system/data mounted).
+ConditionPathIsMountPoint=/system/data
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# systemd-growfs lives at the systemd internals path, not /usr/bin/.
+ExecStart=/usr/lib/systemd/systemd-growfs /system/data
+
+[Install]
+WantedBy=basic.target

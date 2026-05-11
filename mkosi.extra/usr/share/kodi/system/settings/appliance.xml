@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  theatre-os: distribution-defaults override for Kodi.
+
+  Kodi loads this file LAST during settings-definitions init, after
+  /usr/share/kodi/system/settings/{settings,linux,...}.xml. Anything
+  here overrides defaults the upstream files set, but is itself
+  overridden by user choices saved to ~/.kodi/userdata/guisettings.xml.
+  See xbmc/settings/Settings.cpp:245-303 for the load mechanism.
+
+  This is the right layer for "OS-image-bundled defaults" — survives
+  persist wipes, doesn't conflict with user changes (user can flip
+  any of these in the UI and the change persists), and lives in the
+  RO @os subvol so it rolls back atomically with theatre-os update.
+
+  Currently overrides:
+    addons.unknownsources=true   so the bundled third-party
+                                 repositories (jellyfin, etc.)
+                                 work without the user manually
+                                 toggling "Unknown sources" in
+                                 Settings → System → Add-ons.
+                                 See README → Userdata.
+-->
+<settings version="2">
+  <section id="system">
+    <category id="addons">
+      <group id="3">
+        <setting id="addons.unknownsources" type="boolean">
+          <default>true</default>
+        </setting>
+      </group>
+    </category>
+  </section>
+</settings>

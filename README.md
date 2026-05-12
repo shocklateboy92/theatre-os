@@ -89,7 +89,7 @@ Reference implementations:
 ## Hardware
 
 The HTPC is a **Lenovo ThinkPad T480** (during staging at
-`192.168.0.78`, post-cutover takes over `theatre.home.lasath.com`
+`theatre-t480.home.lasath.com`, post-cutover takes over `theatre.home.lasath.com`
 from the existing LibreELEC ZBook). Has Intel vPro / AMT for OOB
 recovery — see `ha-config/t480-hardware-quirks.md`.
 

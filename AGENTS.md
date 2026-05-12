@@ -11,7 +11,7 @@ This repo builds and ships the OS image. It does NOT contain:
 
 ## Target hardware
 
-- T480 staging/prod: `ssh root@192.168.0.78`
+- T480 staging/prod: `ssh root@theatre-t480.home.lasath.com`
 - ZBook (eventual cutover): `ssh root@theatre.home.lasath.com`
 - Both have Intel AMT. T480 quirks: `ha-config/t480-hardware-quirks.md`.
   ZBook tweaks (spec for behaviour to preserve): `ha-config/zbook-libreelec-tweaks.md`.
@@ -22,8 +22,8 @@ Used for hard-reset / KVM recovery when the OS is unresponsive.
 
 - AMT user: `admin`
 - AMT password: `theatre_t480_amt_password` in `ha-config/secrets.yaml`
-- Web UI: `http://192.168.0.78:16992/`
-- SOL: `AMT_PASSWORD=... amtterm 192.168.0.78`
+- Web UI: `http://theatre-t480.home.lasath.com:16992/`
+- SOL: `AMT_PASSWORD=... amtterm theatre-t480.home.lasath.com`
 
 ## Build / deploy commands
 

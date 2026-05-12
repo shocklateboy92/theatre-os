@@ -307,7 +307,7 @@ Other persist mounts (specific paths outside `/var`):
   without hiding the rootfs-shipped `sshd_config`, and we can't
   bind individual files in `/etc/ssh/` cleanly either; redirecting
   `HostKey=` paths to a writable location is simpler. See
-  `mkosi.extra/etc/ssh/sshd_config.d/10-theatreos.conf` and the
+  `mkosi.extra/etc/ssh/sshd_config.d/10-theatre-os.conf` and the
   `sshdgenkeys.service` drop-in that overrides Arch's hardcoded
   ExecStart to write keys to the new path.
 
@@ -711,9 +711,9 @@ Rootfs (`mkosi.extra/`):
 - An empty 0-byte `/etc/machine-id` mountpoint stub.
 - `efi.mount` + `local-fs.target.wants/efi.mount` symlink, mounting
   the ESP at `/efi` for sysupdate / bootctl / kernel-install.
-- `sshd_config.d/10-theatreos.conf` redirecting `HostKey=` to
+- `sshd_config.d/10-theatre-os.conf` redirecting `HostKey=` to
   `/var/lib/ssh/`.
-- `sshdgenkeys.service.d/10-theatreos-persist.conf` overriding
+- `sshdgenkeys.service.d/10-theatre-os-persist.conf` overriding
   Arch's hardcoded keygen path to match.
 - A symlink wanting sshd from `multi-user.target`.
 - The `theatre-os` CLI: dispatcher at `/usr/bin/theatre-os` plus
@@ -735,7 +735,7 @@ Rootfs (`mkosi.extra/`):
 - `tmpfiles.d/kodi.conf` ensuring `/home/kodi` is `0755 kodi:kodi`
   on every boot (the bind-mount target inside `@persist/<v>` is
   pre-created by repart but with no ownership guarantees).
-- `/usr/bin/theatreos-launch-moonlight` shell script: `chvt 2`,
+- `/usr/bin/theatre-os-launch-moonlight` shell script: `chvt 2`,
   `exec moonlight-qt`, `chvt 1` on exit. Triggered from inside
   Kodi via a Python addon shipped in `ha-config/kodi/`.
 
@@ -794,7 +794,7 @@ work. Kodi-gbm v20+ handles DRM master loss/regain gracefully.
 
 ### Launcher
 
-A shell script `/usr/bin/theatreos-launch-moonlight` shipped in the
+A shell script `/usr/bin/theatre-os-launch-moonlight` shipped in the
 image:
 
 ```

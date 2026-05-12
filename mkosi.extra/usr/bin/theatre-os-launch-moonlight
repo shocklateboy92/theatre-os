@@ -5,7 +5,7 @@
 # Triggered from inside Kodi via a Python addon (lives in
 # ha-config/kodi/, NOT this repo — userdata is HA-config scope, not
 # OS-image scope; see README → Userdata for the split). The addon
-# is just `subprocess.Popen("/usr/bin/theatreos-launch-moonlight")`.
+# is just `subprocess.Popen("/usr/bin/theatre-os-launch-moonlight")`.
 #
 # Why VT switching: only one process at a time can hold DRM master
 # on /dev/dri/card0. Kodi-gbm and moonlight-qt cannot share the

@@ -90,6 +90,33 @@ for src in "$tmpl_dir"/*; do
         esac
 done
 
+# Fetch HAKA (custom fork of script.program.homeassistant) into the
+# rootfs tree. Pinned to a commit SHA so a build is reproducible to
+# the exact bytes we shipped. Bump HAKA_SHA when promoting a new
+# upstream commit.
+#
+# The destination is gitignored — the source of truth is the URL +
+# SHA below, not a snapshot in the repo. The .git dir is dropped
+# after checkout (it's not needed at runtime and bloats the image);
+# a .haka-sha stamp file is left behind so we can skip re-cloning
+# when the SHA hasn't changed.
+HAKA_REPO=https://github.com/shocklateboy92/HAKA.git
+HAKA_SHA=a26733d77f7645295fbf48b0de460947904929cc  # work/fernando/mdi-icons tip
+HAKA_DEST=mkosi.extra/usr/share/kodi/addons/script.program.homeassistant
+
+if [ "$(cat "$HAKA_DEST/.haka-sha" 2>/dev/null)" != "$HAKA_SHA" ]; then
+    echo "build.sh: fetching HAKA at $HAKA_SHA"
+    rm -rf "$HAKA_DEST"
+    mkdir -p "$(dirname "$HAKA_DEST")"
+    git clone --quiet "$HAKA_REPO" "$HAKA_DEST"
+    git -C "$HAKA_DEST" checkout --quiet "$HAKA_SHA"
+    rm -rf "$HAKA_DEST/.git"
+    echo "$HAKA_SHA" > "$HAKA_DEST/.haka-sha"
+fi
+
+# Default to `build` if no verb supplied; mkosi requires explicit verbs
+# in some configs.
+
 # Default to `build` if no verb supplied; mkosi requires explicit verbs
 # in some configs.
 if [ "$#" -eq 0 ]; then

@@ -4,3 +4,6 @@
 # NOT ship to the actual HTPC.
 mkosi.local.conf
 mkosi.local/
+
+# Fetched at build time by build.sh — pinned to a SHA, not source.
+mkosi.extra/usr/share/kodi/addons/script.program.homeassistant/

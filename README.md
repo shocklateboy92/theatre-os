@@ -547,6 +547,24 @@ hooks — see [systemd#35988](https://github.com/systemd/systemd/issues/35988)
 — so a wrapper is the only way to compose snapshot logic with
 sysupdate.)
 
+**One TPM unit is also masked: `systemd-pcrproduct.service`.** This
+service writes a "product ID" measurement into a TPM2 NV index used as
+a virtual PCR (NvPCR). The T480's TPM2 chip (Infineon SLB 9670, 2018-
+ish firmware) doesn't correctly implement the `NT_EXTEND` mode that
+NvPCR depends on — `systemd-tpm2-setup` logs `unable to allocate
+NvPCR 'hardware'/'cryptsetup'/'verity': Operation not supported` and
+proceeds with `--graceful`, but `systemd-pcrproduct` then tries to
+extend the (never-allocated) `hardware` NvPCR and fails hard, dragging
+`systemctl is-system-running` to `degraded` for the rest of the boot.
+We don't actually use NvPCR for anything (no FDE, no verity, no
+measured-boot policy enforcement — see "No encryption" above), so the
+service is pure noise. Mask it.
+
+If we eventually move to hardware with a working TPM (e.g. the ZBook
+target may have one), revisit — re-enabling is just deleting the
+symlink. Lenovo has stopped issuing TPM firmware updates for the T480
+generation, so don't expect a fix from that direction.
+
 ### Manual persist snapshots: `theatre-os snapshot` / `restore`
 
 The auto per-version persist snapshot (one fork per OS install) is

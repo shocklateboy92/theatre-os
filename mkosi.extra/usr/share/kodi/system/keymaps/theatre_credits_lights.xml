@@ -1,0 +1,15 @@
+<keymap>
+  <!--
+    Netflix button on the Theatre remote (and the Shield "===" quick-options
+    button) both report scancode 0x189 / Kodi key id 0xF200. Globally that's
+    mapped to ContextMenu (see shield_remote.xml). Inside the fullscreen video
+    player we hijack it to toggle the kitchen cabinet "credits" lights via
+    Home Assistant — handy for lifting the lights when the credits roll
+    without pausing playback.
+  -->
+  <FullscreenVideo>
+    <keyboard>
+      <key id="0xF200">RunScript(script.theatre.lights.toggle)</key>
+    </keyboard>
+  </FullscreenVideo>
+</keymap>

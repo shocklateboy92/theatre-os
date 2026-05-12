@@ -1,0 +1,9 @@
+<keymap>
+  <global>
+    <keyboard>
+      <volume_up>NotifyAll(service.avr.volume, up)</volume_up>
+      <volume_down>NotifyAll(service.avr.volume, down)</volume_down>
+      <volume_mute>NotifyAll(service.avr.volume, mute)</volume_mute>
+    </keyboard>
+  </global>
+</keymap>

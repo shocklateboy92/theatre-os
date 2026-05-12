@@ -761,7 +761,14 @@ Rootfs (`mkosi.extra/`):
   pre-created by repart but with no ownership guarantees).
 - `/usr/bin/theatre-os-launch-moonlight` shell script: `chvt 2`,
   `exec moonlight-qt`, `chvt 1` on exit. Triggered from inside
-  Kodi via a Python addon shipped in `ha-config/kodi/`.
+  Kodi via `script.theatre.lights.toggle` (see Kodi addons below).
+- Kodi vendor addons at `usr/share/kodi/addons/`: `service.avr.volume`,
+  `script.theatre.lights.toggle`, `plugin.video.watchlist`,
+  `context.go.to.show`, `repository.jellyfin.kodi`. Read by Kodi as
+  system addons; no SQLite registration required.
+- Kodi system keymaps at `usr/share/kodi/system/keymaps/`:
+  `avr_volume.xml`, `no_chapter_skip.xml`, `theatre_credits_lights.xml`.
+  Loaded before userdata keymaps; userdata can still override per-key.
 
 Top-level `mkosi.finalize` creates the `/system/data`,
 `/system/persist`, `/efi`, and `/home/kodi` mountpoint stubs in the
@@ -862,31 +869,49 @@ we'd add PipeWire alongside but Kodi/moonlight would still bypass it.
 
 ### Userdata: addons, skin, keymaps, settings
 
-theatre-os ships **no** Kodi customisations. The OS provides the
-Arch `kodi` package + the vendored `kodi-gbm.service`/sysusers/
-tmpfiles from upstream `kodi-standalone-service`, plus a writable
-`/home/kodi/` mountpoint (bind-mounted from `@persist/<v>`);
-everything inside that home — Kodi userdata in `.kodi/` (addons
-like `service.avr.volume`,
-`script.theatre.lights.toggle`, `plugin.video.watchlist`,
-`context.go.to.show`, HAKA, etc., the Arctic Zephyr modded skin,
-keymaps, library, watch state, the Kodi instance UUID), moonlight-qt
-pairing/config in `.config/`, anything else app-specific — is owned
-by `ha-config/kodi/` and pushed to the box by
-`ha-config/kodi/deploy.sh`.
+theatre-os ships the custom Kodi addons and keymaps that are tightly
+coupled to this HTPC setup. Everything that is specific to the theatre
+hardware, reproducible from source, and must survive a wipe-and-rebuild
+lives in this repo. Everything that is per-user state, contains secrets,
+or belongs to a third-party project lives in `ha-config/` and is pushed
+separately.
 
-This is a deliberate split:
+**Vendored in this repo** (`mkosi.extra/usr/share/kodi/`):
 
-- **theatre-os**: Kodi the engine + the gbm/EGL/KMS plumbing + the
-  moonlight launcher script. Reproducible from this repo alone.
-- **ha-config**: which addons are installed, what the menu looks
-  like, where the AVR is, which lights to toggle on credits.
-  Reproducible from ha-config alone.
+- `addons/service.avr.volume` — background service forwarding volume
+  keys to the Denon AVR via Home Assistant.
+- `addons/script.theatre.lights.toggle` — toggles kitchen lights via HA;
+  bound to the Netflix button in fullscreen video.
+- `addons/plugin.video.watchlist` — video plugin that renders an external
+  watchlist API as a widget source.
+- `addons/context.go.to.show` — "Go to Show" / "Go to Season" context
+  menu items for episodes. Also published as a standalone addon at
+  [github.com/shocklateboy92/kodi-context-go-to-show](https://github.com/shocklateboy92/kodi-context-go-to-show).
+- `addons/repository.jellyfin.kodi` — Jellyfin Kodi repository addon.
+- `system/keymaps/avr_volume.xml` — maps volume keys to AVR volume
+  service calls.
+- `system/keymaps/no_chapter_skip.xml` — disables accidental chapter skip.
+- `system/keymaps/theatre_credits_lights.xml` — dims lights on credits
+  via HA keymap action.
+
+Kodi reads system keymaps from `/usr/share/kodi/system/keymaps/` before
+userdata keymaps, so these are active out of the box. Vendor addons in
+`/usr/share/kodi/addons/` are recognised by Kodi as system addons —
+no SQLite registration needed.
+
+**Still deployed by `ha-config/kodi/deploy.sh`**:
+
+- **HAKA** (`script.program.homeassistant`) — third-party HA integration
+  addon, lives in its own repo at `/config/HAKA`.
+- **HAKA `settings.xml`** — contains the HA long-lived access token;
+  belongs in secrets/deploy, never in the image.
+- **SkinShortcuts menu config** — user-edited via the Kodi UI; treating
+  it as image content would fight the user.
+- **Library, watch state, skin choice, Kodi instance UUID** — runtime
+  state that lives in `~/.kodi/` on the persist subvol.
 
 `deploy.sh` writes to `/home/kodi/.kodi/` (was `/storage/.kodi/` on
-LibreELEC); needs path + SSH endpoint update at cutover. Its
-SQLite-poke into `Addons33.db` (to mark deployed addons enabled)
-keeps working unchanged.
+LibreELEC); needs path + SSH endpoint update at cutover.
 
 Because `~/.kodi/` lives on persist, `deploy.sh` doesn't intersect
 with the image/snapshot machinery: it just mutates the per-version

@@ -1,0 +1,12 @@
+<keymap>
+  <FullscreenVideo>
+    <remote>
+      <up>OSD</up>
+      <down>OSD</down>
+    </remote>
+    <keyboard>
+      <up>OSD</up>
+      <down>OSD</down>
+    </keyboard>
+  </FullscreenVideo>
+</keymap>

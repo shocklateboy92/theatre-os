@@ -4,7 +4,10 @@
 #
 # Conventions:
 #   - die "msg"          -> log + exit 1
-#   - confirm "prompt"   -> y/N read, returns 0 on yes
+#   - confirm "prompt" [Y|N]  -> y/n read with the given default (default N).
+#     The default is what the user gets by hitting Enter; it's also shown
+#     capitalised in the [y/N] / [Y/n] hint so the prompt and behaviour
+#     match. Returns 0 on yes.
 #   - All functions assume `set -eu` is in effect at the call site.
 
 # Where the data partition lives in the running rootfs (set up by the
@@ -16,14 +19,23 @@ die() {
     exit 1
 }
 
-# Ask the user for y/N; default N. Returns 0 on yes, 1 on no.
-# Refuses to prompt if stdin isn't a tty (no silent default-yes).
+# Ask the user for y/n. The optional 2nd arg is the default applied on
+# empty input (Enter): "Y" or "N", default "N" if omitted. Returns 0 on
+# yes, 1 on no. Refuses to prompt if stdin isn't a tty (no silent
+# default-yes/no — callers running non-interactively should pass an
+# explicit --reboot/--no-reboot etc. flag and skip the prompt).
 confirm() {
     if [ ! -t 0 ]; then
         die "refusing to prompt for confirmation: stdin is not a tty"
     fi
-    printf '%s [y/N] ' "$1" >&2
+    case "${2:-N}" in
+        Y|y) hint='[Y/n]'; default=y ;;
+        N|n) hint='[y/N]'; default=n ;;
+        *)   die "confirm: bad default '$2' (want Y or N)" ;;
+    esac
+    printf '%s %s ' "$1" "$hint" >&2
     read -r reply || return 1
+    [ -n "$reply" ] || reply=$default
     case "$reply" in
         y|Y|yes|YES) return 0 ;;
         *)           return 1 ;;

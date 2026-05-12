@@ -21,16 +21,20 @@ usage() {
 Usage: theatre-os <command> [args...]
 
 Commands:
-  update              Pull and install the next release. Snapshots persist
-                      and offers to reboot.
+  update [--reboot|--no-reboot]
+                      Pull and install the next release. Snapshots persist
+                      and offers to reboot (defaults to Yes; --reboot or
+                      --no-reboot skips the prompt).
   list                Show available and installed versions
                       (passthrough to systemd-sysupdate list).
   snapshot [name]     Manually snapshot persist for a checkpoint.
     snapshot list       Show snapshots.
     snapshot delete <id>  Drop one.
     snapshot prune      Drop snapshots > 30 days old, with confirm.
-  restore <id>        Stage a persist snapshot to be active after the
-                      next boot. Reboot to apply.
+  restore <id> [--reboot|--no-reboot]
+                      Stage a persist snapshot to be active after the
+                      next boot. Reboot to apply (defaults to Yes;
+                      --reboot or --no-reboot skips the prompt).
   experiment          Enter experiment mode (live, no reboot). Reboot to
                       leave. Throwaway scratch for /usr / /etc edits.
 

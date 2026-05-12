@@ -27,6 +27,22 @@
 # is for when you want to rewind WITHIN the running OS version).
 
 cmd_restore() {
+    # --reboot / --no-reboot skip the trailing reboot prompt. The
+    # earlier "Proceed?" confirmation is NOT skipped — restore is
+    # destructive (renames the live persist subvol) and should always
+    # require an explicit yes.
+    reboot_mode=ask
+    args=
+    for a in "$@"; do
+        case "$a" in
+            --reboot)    reboot_mode=yes ;;
+            --no-reboot) reboot_mode=no ;;
+            *)           args="$args $a" ;;
+        esac
+    done
+    # shellcheck disable=SC2086 # intentional re-split of accumulated args
+    set -- $args
+
     [ "$#" -eq 1 ] || die "restore requires exactly one snapshot id"
     snap=$(resolve_snapshot "$1")
 
@@ -96,7 +112,9 @@ Restore staged. Next boot will use @persist/$snap (via fresh
 >>> and reboot will be LOST on the restored state. Reboot soon.
 
 EOF
-    if confirm "Reboot now?"; then
-        systemctl reboot
-    fi
+    case "$reboot_mode" in
+        yes) systemctl reboot ;;
+        no)  printf 'Skipping reboot (--no-reboot).\n' ;;
+        ask) if confirm "Reboot now?" Y; then systemctl reboot; fi ;;
+    esac
 }

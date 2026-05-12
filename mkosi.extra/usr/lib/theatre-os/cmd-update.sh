@@ -20,6 +20,20 @@
 #   6. Offer to reboot.
 
 cmd_update() {
+    # --reboot / --no-reboot make the post-update reboot non-interactive,
+    # for ssh sessions where you'd rather not bother answering the prompt
+    # (or where stdin isn't a tty and `confirm` would refuse). Default
+    # behaviour with neither flag is to prompt with [Y/n] — Enter reboots,
+    # since that's what the user wants ~all the time.
+    reboot_mode=ask
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --reboot)    reboot_mode=yes; shift ;;
+            --no-reboot) reboot_mode=no; shift ;;
+            *) die "update: unknown argument: $1" ;;
+        esac
+    done
+
     if is_experiment_mode; then
         die "refusing to update from experiment mode (reboot to leave experiment mode first)"
     fi
@@ -74,7 +88,9 @@ cmd_update() {
     fi
 
     printf '\nUpdate complete. Reboot to use %s.\n' "$new"
-    if confirm "Reboot now?"; then
-        systemctl reboot
-    fi
+    case "$reboot_mode" in
+        yes) systemctl reboot ;;
+        no)  printf 'Skipping reboot (--no-reboot).\n' ;;
+        ask) if confirm "Reboot now?" Y; then systemctl reboot; fi ;;
+    esac
 }

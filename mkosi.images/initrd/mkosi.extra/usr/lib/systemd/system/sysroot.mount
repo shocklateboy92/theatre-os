@@ -16,7 +16,7 @@ DefaultDependencies=no
 Before=initrd-root-fs.target
 
 [Mount]
-What=/dev/disk/by-label/theatreos-data
+What=/dev/disk/by-partuuid/78332b2c-d061-488f-8f21-41f3fa97226a
 Where=/sysroot
 Type=btrfs
 Options=ro,subvol=/@os/@VERSION@

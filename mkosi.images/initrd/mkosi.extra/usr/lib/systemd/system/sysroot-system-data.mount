@@ -3,8 +3,11 @@
 # that after systemd's switch-root the kernel mount survives at
 # /system/data on the running rootfs.
 #
-# Found by GPT label baked in at install time by repart (see
-# mkosi.repart.in/10-data.conf.in).
+# Found by pinned PARTUUID (set in mkosi.repart.in/10-data.conf.in
+# at install time and re-asserted by the runtime-grow config in
+# mkosi.extra/usr/lib/repart.d/10-data.conf). The PARTUUID is stable
+# across rebuilds and reinstalls because it's hardcoded in the repart
+# config, not auto-generated.
 #
 # Mounted RW because sysupdate (Type=subvolume) and the
 # theatre-os update wrapper (btrfs subvolume snapshot @persist/<r>
@@ -21,7 +24,7 @@ After=sysroot.mount
 Before=initrd-fs.target
 
 [Mount]
-What=/dev/disk/by-label/theatreos-data
+What=/dev/disk/by-partuuid/78332b2c-d061-488f-8f21-41f3fa97226a
 Where=/sysroot/system/data
 Type=btrfs
 # subvolid=5 is the btrfs filesystem root (the implicit top-level

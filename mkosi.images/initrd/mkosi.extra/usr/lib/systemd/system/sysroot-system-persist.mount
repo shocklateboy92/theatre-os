@@ -15,7 +15,7 @@ After=sysroot-system-data.mount
 Before=initrd-fs.target
 
 [Mount]
-What=/dev/disk/by-label/theatreos-data
+What=/dev/disk/by-partuuid/78332b2c-d061-488f-8f21-41f3fa97226a
 Where=/sysroot/system/persist
 Type=btrfs
 Options=rw,subvol=/@persist/@VERSION@

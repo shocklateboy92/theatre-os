@@ -11,7 +11,14 @@
 
 [Partition]
 Type=linux-generic
-Label=theatreos-data
+Label=theatre-os-data
+# Pinned PARTUUID so the initrd can find this partition by a stable
+# identifier without having to trust the GPT label or partition order.
+# Mount units in the initrd reference this exact UUID via
+# /dev/disk/by-partuuid/. If you change it here, change it there too.
+# Keep in sync with the runtime-grow config at
+# mkosi.extra/usr/lib/repart.d/10-data.conf.
+UUID=78332b2c-d061-488f-8f21-41f3fa97226a
 Format=btrfs
 
 # Container directories under which sysupdate later drops @os/<v>

@@ -175,7 +175,7 @@ Single GPT on the internal NVMe, two partitions:
 
 ```
 Part 1: ESP             2 GiB    vfat    GUID: ESP                   label: ESP
-Part 2: data btrfs      rest     btrfs   GUID: Linux generic data    label: theatreos-data
+Part 2: data btrfs      rest     btrfs   GUID: Linux generic data    label: theatre-os-data
 ```
 
 The btrfs partition holds **both** OS and persist subvolumes:
@@ -220,13 +220,19 @@ Revisit if persist ever holds something genuinely sensitive.
 
 ESP is auto-discovered by systemd-boot via its standard GUID. The data
 partition uses the standard "Linux generic data" GPT type GUID with the
-label `theatreos-data`; the initrd looks it up by label, mounts it,
+label `theatre-os-data` and a pinned PARTUUID
+(`78332b2c-d061-488f-8f21-41f3fa97226a`, hardcoded in
+`mkosi.repart.in/10-data.conf.in`); the initrd looks it up by PARTUUID
+(via `/dev/disk/by-partuuid/`), mounts it,
 then mounts the appropriate `@os/<v>` and `@persist/<v>` subvolumes
 based on the version stamped into the UKI's `/usr/lib/os-release`.
 
 (Existing files like `/etc/fstab` aren't used for these mounts — the
 initrd and a small systemd-mount unit handle them, so the same image
-works on any host with a `theatreos-data`-labelled partition.)
+works on any host whose data partition uses the pinned PARTUUID. The
+PARTUUID, not the label, is what makes the mount work — the label is
+informational. Reinstalls re-assert the same PARTUUID via
+`mkosi.repart.in/10-data.conf.in`.)
 
 The ESP is mounted RW at `/efi` from the rootfs by a static `efi.mount`
 unit (`What=/dev/disk/by-label/ESP`). This mount is needed so
@@ -1298,7 +1304,8 @@ at build time by `build.sh`):
 ```
 [Partition]
 Type=linux-generic
-Label=theatreos-data
+Label=theatre-os-data
+UUID=78332b2c-d061-488f-8f21-41f3fa97226a
 Format=btrfs
 MakeDirectories=/@os /@persist /@os/@VERSION@/var /@persist/@VERSION@/var /@persist/@VERSION@/var/lib /@persist/@VERSION@/var/lib/ssh /@persist/@VERSION@/var/lib/theatre-os /@persist/@VERSION@/home /@persist/@VERSION@/home/kodi
 Subvolumes=/@os/@VERSION@:ro /@persist/@VERSION@
@@ -1390,7 +1397,7 @@ publish → Local testing.)
    the build pipeline composes).
 2. **(was 4)** Installer is just `Format=disk` on the top-level
    `mkosi.conf` with custom `mkosi.repart/` configs building the
-   `theatreos-data` btrfs layout (`@os/<v>` + `@persist/<v>`).
+   `theatre-os-data` btrfs layout (`@os/<v>` + `@persist/<v>`).
    Single image build produces the bootable `.raw` *and* the sysupdate
    `.tar` + `.efi` artefacts via `SplitArtifacts=uki,tar`. Disk builds
    but doesn't boot to a real shell yet — no mount logic, drops to

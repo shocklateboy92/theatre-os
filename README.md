@@ -93,13 +93,15 @@ The HTPC is a **Lenovo ThinkPad T480** (during staging at
 from the existing LibreELEC ZBook). Has Intel vPro / AMT for OOB
 recovery — see `t480-hardware-quirks.md`.
 
-The current production box (HP ZBook Firefly 14 G7 running LibreELEC)
-gets unplugged from the AV setup at cutover. theatre-os is **not**
-intended to run on it. `ha-config/zbook-libreelec-tweaks.md` is kept
-as a reference for the *behaviours* (BT wake, WOL, power-key
-handling, wake chime, sleep mode) that need to keep working post-
-cutover, but most of the *implementation* tweaks in that doc are
-dock/USB-NIC specific to the ZBook and don't necessarily apply.
+The previous production box (HP ZBook Firefly 14 G7 running LibreELEC)
+was unplugged from the AV setup at the T480 cutover. theatre-os is
+**not** intended to run on it. `legacy-zbook-libreelec.md` is kept as
+a reference for the *behaviours* (BT wake, WOL, power-key handling,
+wake chime, sleep mode, Shield Remote "find") that worked on the
+ZBook and may need to be reimplemented on theatre-os if equivalent
+hardware/features come back. Most of the *implementation* tweaks in
+that doc are dock/USB-NIC specific to the ZBook and won't port
+directly.
 
 ## Iteration loop
 

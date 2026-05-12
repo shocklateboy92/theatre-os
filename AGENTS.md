@@ -14,7 +14,8 @@ This repo builds and ships the OS image. It does NOT contain:
 - T480 staging/prod: `ssh root@theatre-t480.home.lasath.com`
 - ZBook (eventual cutover): `ssh root@theatre.home.lasath.com`
 - Both have Intel AMT. T480 quirks: `t480-hardware-quirks.md`.
-  ZBook tweaks (spec for behaviour to preserve): `ha-config/zbook-libreelec-tweaks.md`.
+  ZBook tweaks (legacy reference for behaviour that may need re-implementing
+  on theatre-os): `legacy-zbook-libreelec.md`.
 
 ## AMT (out-of-band management)
 

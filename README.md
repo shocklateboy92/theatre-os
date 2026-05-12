@@ -91,7 +91,7 @@ Reference implementations:
 The HTPC is a **Lenovo ThinkPad T480** (during staging at
 `theatre-t480.home.lasath.com`, post-cutover takes over `theatre.home.lasath.com`
 from the existing LibreELEC ZBook). Has Intel vPro / AMT for OOB
-recovery — see `ha-config/t480-hardware-quirks.md`.
+recovery — see `t480-hardware-quirks.md`.
 
 The current production box (HP ZBook Firefly 14 G7 running LibreELEC)
 gets unplugged from the AV setup at cutover. theatre-os is **not**
@@ -149,7 +149,7 @@ The kernel cmdline includes `console=tty0 console=ttyS0,115200` so
 that AMT's Serial-over-LAN sees kernel + systemd output during boot
 and any panic. Kodi runs on tty1 and is unaffected. (AMT SOL only
 shows kernel onward, not pre-kernel firmware/POST — for those, use
-AMT KVM. See `ha-config/t480-hardware-quirks.md`.)
+AMT KVM. See `t480-hardware-quirks.md`.)
 
 ## Versioning
 

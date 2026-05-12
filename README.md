@@ -764,7 +764,8 @@ Rootfs (`mkosi.extra/`):
   Kodi via `script.theatre.lights.toggle` (see Kodi addons below).
 - Kodi vendor addons at `usr/share/kodi/addons/`: `service.avr.volume`,
   `script.theatre.lights.toggle`, `plugin.video.watchlist`,
-  `context.go.to.show`, `repository.jellyfin.kodi`. Read by Kodi as
+  `context.go.to.show`, `repository.jellyfin.kodi`, `script.module.yaml`,
+  `script.module.iso8601`. Read by Kodi as
   system addons; no SQLite registration required.
 - Kodi system keymaps at `usr/share/kodi/system/keymaps/`:
   `avr_volume.xml`, `no_chapter_skip.xml`, `theatre_credits_lights.xml`.
@@ -888,6 +889,10 @@ separately.
   menu items for episodes. Also published as a standalone addon at
   [github.com/shocklateboy92/kodi-context-go-to-show](https://github.com/shocklateboy92/kodi-context-go-to-show).
 - `addons/repository.jellyfin.kodi` — Jellyfin Kodi repository addon.
+- `addons/script.module.yaml`, `addons/script.module.iso8601` — Python
+  module addons that HAKA depends on. Vendored as opaque blobs
+  (repackaged Kodi addons of upstream PyYAML / iso8601). Bumped only
+  if HAKA needs a newer version.
 - `system/keymaps/avr_volume.xml` — maps volume keys to AVR volume
   service calls.
 - `system/keymaps/no_chapter_skip.xml` — disables accidental chapter skip.

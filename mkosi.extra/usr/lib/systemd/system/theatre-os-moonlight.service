@@ -1,0 +1,83 @@
+# theatre-os: moonlight game streaming as a system unit.
+#
+# Why a unit (not a shell script): kodi-gbm holds DRM master via
+# the legacy ioctl path and does NOT release it on VT switch (Kodi
+# upstream confirms: "GBM kodi can't be launched from an active
+# desktop... without kodi supporting relinquishing being the master
+# when launching the app and reacquiring it afterwards then
+# launching another gui app isn't possible" — Kodi forum tid 373067).
+# So the only way to hand DRM master to moonlight is to STOP kodi
+# entirely (close()s the DRM fd, kernel revokes master), run
+# moonlight, then start kodi again. Conflicts=kodi-gbm.service
+# does step 1 automatically; ExecStopPost= does step 3.
+#
+# Why this unit and not a shell script with `systemctl stop kodi-gbm
+# && moonlight && systemctl start kodi-gbm`: moonlight needs its own
+# logind session for /dev/dri device delegation by libseat (the kodi
+# user's own session is on tty1 and goes away when kodi-gbm stops).
+# Running moonlight via this unit with PAMName=login + User=kodi
+# gets us a fresh logind session with seat0 device access — same
+# trick kodi-gbm uses. A shell-out to `runuser` would have to
+# re-implement the PAM dance.
+#
+# Conflicts= is one-directional: starting moonlight stops kodi
+# automatically, but stopping moonlight does NOT start kodi. We need
+# the explicit ExecStopPost= to bring kodi back, with --no-block to
+# avoid a deadlock (kodi can't go active until moonlight is fully
+# inactive, moonlight can't go inactive until ExecStopPost returns).
+# The `+` prefix runs ExecStopPost as root since starting a system
+# unit requires privileges User=kodi doesn't have.
+#
+# Triggering: the kodi user can `systemctl start
+# theatre-os-moonlight.service` without auth via the polkit rule at
+# /etc/polkit-1/rules.d/10-theatre-os-moonlight.rules. The Kodi
+# launcher addon (in ha-config/kodi/, NOT this repo) does exactly
+# that — see README → Kodi & moonlight session.
+
+[Unit]
+Description=Moonlight game streaming (theatre-os)
+Conflicts=kodi-gbm.service
+After=kodi-gbm.service
+
+[Service]
+# Mirror kodi-gbm.service's session setup so moonlight gets seat-
+# delegated DRM access and a populated XDG_RUNTIME_DIR.
+User=kodi
+Group=kodi
+SupplementaryGroups=audio video optical input video_dma render
+PAMName=login
+TTYPath=/dev/tty1
+StandardInput=tty
+StandardOutput=journal
+
+# Qt EGLFS direct-to-KMS, ALSA audio backend (matches Kodi so the
+# AVR doesn't see a format change at handoff). Qt auto-detects
+# /dev/dri/cardN; no QT_QPA_EGLFS_KMS_CONFIG needed on this hardware.
+Environment=QT_QPA_PLATFORM=eglfs
+Environment=QT_QPA_EGLFS_INTEGRATION=eglfs_kms
+Environment=QT_MEDIA_BACKEND=alsa
+
+# Arch's moonlight-qt package installs the binary as plain
+# /usr/bin/moonlight (no -qt suffix), despite the package name.
+ExecStart=/usr/bin/moonlight
+
+# Bring Kodi back when moonlight goes away, regardless of how
+# (clean quit from the UI, SIGINT, crash). --no-block prevents the
+# Conflicts= deadlock described above. The `+` prefix bypasses
+# User=kodi to run as root, which is required to start a system
+# unit.
+ExecStopPost=+/usr/bin/systemctl --no-block start kodi-gbm.service
+
+# Cosmetic: SIGINT (Ctrl-C while debugging via SSH) and SIGTERM
+# (`systemctl stop`) shouldn't show as failed, since they're the
+# admin's intent. Normal user-quit-from-UI exits 0 anyway.
+SuccessExitStatus=SIGINT SIGTERM
+
+# If moonlight ignores SIGTERM (Qt apps sometimes do under EGLFS
+# with no window focus), don't leave the screen black for the
+# default 90s before SIGKILL kicks in.
+TimeoutStopSec=10s
+
+[Install]
+# Not enabled at boot; only started on demand by the Kodi launcher
+# addon (or `systemctl start` for testing).

@@ -1,0 +1,22 @@
+// theatre-os: allow the kodi user to start/stop
+// theatre-os-moonlight.service without authentication.
+//
+// The Kodi launcher addon (lives in ha-config/kodi/, NOT this repo)
+// runs as the kodi user inside Kodi's process, and triggers game
+// streaming by `subprocess.Popen(["systemctl", "start",
+// "theatre-os-moonlight.service"])`. Without this rule polkit would
+// prompt for root auth, and there's no human at a TTY to answer.
+//
+// Scoped narrowly: kodi user, single named unit, manage-units
+// action only. No other systemctl powers granted.
+//
+// See README → Kodi & moonlight session for the full handoff design.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        subject.user == "kodi") {
+        var unit = action.lookup("unit");
+        if (unit == "theatre-os-moonlight.service") {
+            return polkit.Result.YES;
+        }
+    }
+});

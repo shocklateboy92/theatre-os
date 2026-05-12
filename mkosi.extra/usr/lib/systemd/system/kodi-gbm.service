@@ -23,8 +23,14 @@
 # expected runtime environment Just Work.
 #
 # Conflicts=getty@tty1.service stops the getty when Kodi starts,
-# same pattern sddm uses. Other ttys still get gettys for emergency
-# console access via AMT KVM (see README → Boot sequence).
+# same pattern sddm uses. In our setup this is a belt-and-braces:
+# the kernel cmdline carries `systemd.getty_auto=0` so no autovt
+# getty would spawn on tty1 in the first place. Keeping the
+# Conflicts= preserves the upstream pattern and protects us if
+# someone later flips getty_auto back on. Emergency console is
+# AMT SOL on ttyS0; Ctrl-Alt-Fn doesn't work on this console (see
+# README → Display ownership: VT switching), which is why no other
+# tty runs a getty either.
 #
 # Alias=display-manager.service makes `systemctl enable kodi-gbm`
 # also enable it under the conventional display-manager symlink, so

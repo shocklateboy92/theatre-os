@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<addon id="script.theatre.moonlight" name="Moonlight" version="1.0.0" provider-name="lasath">
+    <requires>
+        <import addon="xbmc.python" version="3.0.0"/>
+    </requires>
+    <extension point="xbmc.python.script" library="default.py">
+        <provides>executable</provides>
+    </extension>
+    <extension point="xbmc.addon.metadata">
+        <summary>Launch moonlight game streaming.</summary>
+        <description>Starts theatre-os-moonlight.service via systemctl. The unit's Conflicts=kodi-gbm.service stops Kodi (releasing DRM master); ExecStopPost= brings Kodi back when moonlight exits. The kodi user is allowed to invoke this one unit without auth via /etc/polkit-1/rules.d/10-theatre-os-moonlight.rules. See theatre-os README → Display ownership: stop-and-start handoff.</description>
+        <platform>linux</platform>
+        <license>MIT</license>
+    </extension>
+</addon>

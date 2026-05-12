@@ -720,8 +720,12 @@ behaviour; the custom pieces are noted.
    the getty when Kodi starts (same pattern sddm uses). The unit
    is wired in via `Alias=display-manager.service`, which is
    pulled by `graphical.target` (our `default.target`).
-   Other ttys still get gettys for emergency console access via
-   AMT KVM. See "Kodi & moonlight session" below.
+   No gettys run on any other tty either: the kernel cmdline
+   carries `systemd.getty_auto=0` to disable autovt spawning
+   entirely. Ctrl-Alt-Fn VT switching doesn't work on this
+   console anyway, so the gettys would never be reachable from
+   the keyboard. Emergency console is AMT SOL on ttyS0. See
+   "Kodi & moonlight session" below.
 
 ### Custom code summary
 
@@ -759,9 +763,18 @@ Rootfs (`mkosi.extra/`):
 - `tmpfiles.d/kodi.conf` ensuring `/home/kodi` is `0755 kodi:kodi`
   on every boot (the bind-mount target inside `@persist/<v>` is
   pre-created by repart but with no ownership guarantees).
-- `/usr/bin/theatre-os-launch-moonlight` shell script: `chvt 2`,
-  `exec moonlight-qt`, `chvt 1` on exit. Triggered from inside
-  Kodi via `script.theatre.lights.toggle` (see Kodi addons below).
+- `usr/lib/systemd/system/theatre-os-moonlight.service`: starts
+  moonlight as the kodi user with the same logind-session shape
+  as kodi-gbm (PAMName=login, TTYPath=/dev/tty1) so it gets seat-
+  delegated DRM access. `Conflicts=kodi-gbm.service` makes start
+  auto-stop Kodi; `ExecStopPost=+systemctl --no-block start
+  kodi-gbm.service` brings Kodi back when moonlight exits. See
+  README → Display ownership.
+- `etc/polkit-1/rules.d/10-theatre-os-moonlight.rules`: lets the
+  kodi user `systemctl start theatre-os-moonlight.service` without
+  auth, so the Kodi launcher addon (in ha-config/kodi/) can fire it.
+  Scoped narrowly to that one user + that one unit + the
+  manage-units action.
 - Kodi vendor addons at `usr/share/kodi/addons/`: `service.avr.volume`,
   `script.theatre.lights.toggle`, `plugin.video.watchlist`,
   `context.go.to.show`, `repository.jellyfin.kodi`, `script.module.yaml`,
@@ -801,45 +814,86 @@ streaming and gives the display fully back to Kodi when the user quits
 moonlight. Both run compositor-free (gbm/EGLFS direct to KMS) so
 refresh-rate and HDR switching work, matching LibreELEC's behaviour.
 
-### Display ownership: VT switching
+### Display ownership: stop-and-start handoff
 
-Only one process at a time can hold DRM master on `/dev/dri/card0`,
-which means Kodi-gbm and moonlight-qt cannot share the screen. The
-solution is the standard Linux **virtual terminal switching** dance:
+Only one process at a time can hold DRM master on the GPU
+(`/dev/dri/card1` on the T480), which means Kodi-gbm and moonlight
+cannot share the screen. The original LibreELEC pattern was to use
+VT switching: X11 on tty7 would chvt away, releasing DRM master,
+and the new app on tty2 would grab it. **That doesn't work with
+Kodi-gbm.** Kodi grabs DRM master via the legacy ioctl path and
+does NOT relinquish it on VT switch. (Confirmed by Kodi upstream:
+*"Without kodi supporting relinquishing being the master when
+launching the app and reacquiring it afterwards then launching
+another gui app isn't possible"* — Kodi forum tid 373067.) Validated
+on real hardware: with Kodi running on tty1, `chvt 2` + launching
+moonlight produced `Could not set DRM mode for screen eDP1
+(Permission denied)` on every page flip, because Kodi was still
+master.
 
-- Kodi runs on **tty1** as a system service (`kodi-gbm.service`,
-  vendored from the AUR `kodi-standalone-service` package; see
-  Custom code summary). The unit uses `User=kodi` + `PAMName=login`
-  to land in `user-N.slice`, which gets us XDG_RUNTIME_DIR + a
-  session bus + tty ownership for free (the upstream pattern; cost
-  is that graceful shutdown needs `kodi-send -a ShutDown` rather
-  than `systemctl poweroff` — HA's `theatre_turn_off` automation
-  already does this). Holds DRM master while the
-  active VT is tty1.
-- moonlight-qt runs on **tty2**, launched on demand. The kernel revokes
-  Kodi's DRM master when the active VT changes; moonlight takes it.
-- When moonlight exits, the launcher switches back to tty1; Kodi
-  re-acquires DRM master and resumes drawing.
+The handoff that actually works is **stop kodi, run moonlight,
+restart kodi**. Stopping `kodi-gbm.service` close()'s its DRM fd,
+the kernel revokes master, moonlight (running as a fresh process
+in its own logind session) grabs it cleanly. When moonlight exits,
+kodi-gbm starts back up.
 
-This is the same pattern X-on-tty7 used for years; mature, known to
-work. Kodi-gbm v20+ handles DRM master loss/regain gracefully.
+Mechanics:
+
+- Kodi runs on tty1 as `kodi-gbm.service`. Holds DRM master
+  whenever it's active. Same `User=kodi` + `PAMName=login` setup
+  as before.
+- moonlight runs as `theatre-os-moonlight.service`, with
+  `Conflicts=kodi-gbm.service` (so starting moonlight automatically
+  stops Kodi) and the same `User=kodi` + `PAMName=login` +
+  `TTYPath=/dev/tty1` so it gets a real logind session with
+  seat-delegated `/dev/dri` access. Without the matching session
+  setup, moonlight would fail to open the DRM device with
+  `Permission denied` even with Kodi stopped — libseat hands devices
+  to whoever owns the active session on the seat.
+- When moonlight exits (clean quit, SIGINT, crash), an
+  `ExecStopPost=+systemctl --no-block start kodi-gbm.service`
+  brings Kodi back. The `--no-block` is necessary: without it, the
+  start command waits for kodi-gbm to go active, but kodi-gbm can't
+  go active until moonlight is fully `inactive`, and moonlight
+  can't go inactive until ExecStopPost returns. Classic deadlock.
+  `--no-block` queues the start and returns immediately. The `+`
+  prefix runs the command as root (User=kodi can't manage system
+  units).
+- The kodi user can `systemctl start theatre-os-moonlight.service`
+  without auth via a polkit rule scoped to that one unit + that
+  one user — see Custom code summary.
+
+Cost: ~5 seconds of black screen on each transition while Kodi
+tears down or comes back up. Acceptable for a handoff that happens
+once per gaming session, not per-frame. LibreELEC's retroarch
+addon uses the same stop-and-start pattern for the same reason.
+
+Trade-off rejected: keeping Kodi running and overlaying moonlight
+via a Wayland compositor (cage, gamescope) would skip the visible
+gap, but requires switching Kodi to wayland windowing — which
+breaks our gbm-direct refresh-rate switching, and the lossless
+audio passthrough story leans on ALSA-direct (see Audio below).
+Not worth it.
+
+Trade-off rejected: switching Kodi to X11. X-on-tty7 does
+relinquish DRM master cleanly on VT switch. But Kodi-x11 loses
+HDR / 10-bit passthrough on Linux's open driver stack, which is
+why LibreELEC's Generic build moved to GBM in the first place.
 
 ### Launcher
 
-A shell script `/usr/bin/theatre-os-launch-moonlight` shipped in the
-image:
+There is no launcher script. Triggering moonlight is just
+`systemctl start theatre-os-moonlight.service` — the `Conflicts=`
++ `ExecStopPost=` machinery on the unit (see "Display ownership"
+above) handles the rest of the lifecycle.
 
-```
-#!/bin/sh
-trap 'chvt 1' EXIT INT TERM
-chvt 2
-exec moonlight-qt …  # Qt EGLFS env vars set as needed
-```
-
-Triggered from inside Kodi via a Python addon (lives in the
-`ha-config/kodi/` repo, *not* this one — userdata is HA-config scope,
-not OS-image scope). The addon is just `subprocess.Popen` of the
-launcher script.
+The Kodi addon (lives in the `ha-config/kodi/` repo, *not* this
+one — userdata is HA-config scope, not OS-image scope) is a thin
+`subprocess.Popen(["systemctl", "start",
+"theatre-os-moonlight.service"])` wrapped in whatever menu/button
+binding feels right. The polkit rule at
+`mkosi.extra/etc/polkit-1/rules.d/10-theatre-os-moonlight.rules`
+allows the `kodi` user to start that one specific unit without auth.
 
 ### Audio
 

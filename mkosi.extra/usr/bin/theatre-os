@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # theatre-os — single entry point for OS-level operations on a running box.
 #
 # Adding a verb means adding a `cmd-<verb>.sh` under /usr/lib/theatre-os/

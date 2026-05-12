@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # theatre-os update — pull and install the next release.
 #
 # Wraps systemd-sysupdate to add the experiment-mode guard and the

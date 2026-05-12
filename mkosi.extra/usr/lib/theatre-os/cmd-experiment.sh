@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # theatre-os experiment — enter experiment mode live, no reboot.
 #
 # For when you need to `pacman -S foo` on the box to test something

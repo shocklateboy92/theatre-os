@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # theatre-os snapshot — manual persist snapshots for explicit
 # checkpoints before risky persist mutations (e.g. ha-config's
 # deploy.sh pushing new Kodi addons, manual SSH edits to Kodi
@@ -52,7 +53,7 @@ resolve_snapshot() {
         0) die "no snapshot matching '$id'" ;;
         1) printf '%s' "$matches" ;;
         *) printf 'theatre-os: ambiguous snapshot id %s, matches:\n' "$id" >&2
-           printf '  %s\n' $matches >&2
+           printf '%s\n' "$matches" | sed 's/^/  /' >&2
            exit 1
            ;;
     esac
@@ -146,7 +147,7 @@ cmd_snapshot_prune() {
             | sed -nE "s|.*${THEATRE_SNAPSHOT_PREFIX}(${THEATRE_SNAPSHOT_TS_RE}).*|\\1|p")
         # Belt-and-braces: skip if we couldn't parse a timestamp.
         [ -n "$ts" ] || continue
-        if [ "$ts" \< "$cutoff" ]; then
+        if [[ "$ts" < "$cutoff" ]]; then
             printf '%s\n' "$s"
         fi
     done)
@@ -158,7 +159,7 @@ cmd_snapshot_prune() {
 
     printf 'About to delete %d snapshot(s) older than %s:\n' \
         "$(printf '%s\n' "$to_delete" | wc -l)" "$cutoff"
-    printf '  %s\n' $to_delete
+    printf '%s\n' "$to_delete" | sed 's/^/  /'
 
     if ! confirm "Proceed?"; then
         echo "Aborted."

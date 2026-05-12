@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # theatre-os restore — stage a persist snapshot to be the active
 # persist after the next boot.
 #
@@ -78,7 +79,7 @@ About to restore @persist/$snap to be the next boot's @persist/$running.
     - The restored state is active.
     - Roll back this restore by booting an older UKI from systemd-boot
       (which would pick a different @persist/<other-v> entirely), or
-      by running `theatre-os restore` against $backup.
+      by running 'theatre-os restore' against $backup.
 
 EOF
     if ! confirm "Proceed?"; then

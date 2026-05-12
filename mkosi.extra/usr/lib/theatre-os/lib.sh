@@ -1,6 +1,8 @@
+# shellcheck shell=bash
 # theatre-os shared shell helpers. Sourced by /usr/bin/theatre-os and
-# /usr/lib/theatre-os/cmd-*.sh. Pure POSIX shell (no bashisms) so the CLI
-# stays runnable under any /bin/sh; the bin script just sources us.
+# /usr/lib/theatre-os/cmd-*.sh. Bash (matches /bin/sh on Arch); we
+# don't try to stay POSIX — owning the bash dependency keeps the
+# code natural (e.g. `[[ a < b ]]` for lexicographic compares).
 #
 # Conventions:
 #   - die "msg"          -> log + exit 1

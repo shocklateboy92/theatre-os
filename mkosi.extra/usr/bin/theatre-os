@@ -35,8 +35,10 @@ Commands:
                       Stage a persist snapshot to be active after the
                       next boot. Reboot to apply (defaults to Yes;
                       --reboot or --no-reboot skips the prompt).
-  experiment          Enter experiment mode (live, no reboot). Reboot to
+  experiment [--yes|--no]
+                      Enter experiment mode (live, no reboot). Reboot to
                       leave. Throwaway scratch for /usr / /etc edits.
+                      Defaults to prompting; --yes / --no skip the prompt.
 
 See README → Updates & experiment mode.
 EOF

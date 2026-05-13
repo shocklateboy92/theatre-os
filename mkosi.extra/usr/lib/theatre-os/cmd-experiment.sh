@@ -51,6 +51,20 @@ list_experiments() {
 }
 
 cmd_experiment() {
+    # --yes / --no make the "Proceed?" prompt non-interactive, for ssh
+    # sessions where stdin isn't a tty (and `confirm` would refuse).
+    # Default with neither flag is to prompt with [y/N] — entering
+    # experiment mode is destructive enough on the next reboot that
+    # we want explicit consent by default.
+    proceed_mode=ask
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --yes) proceed_mode=yes; shift ;;
+            --no)  proceed_mode=no;  shift ;;
+            *) die "experiment: unknown argument: $1" ;;
+        esac
+    done
+
     if is_experiment_mode; then
         die "already in experiment mode (reboot to leave)"
     fi
@@ -73,10 +87,14 @@ About to enter experiment mode.
     your dev box and ship a new image (the iteration loop).
 
 EOF
-    if ! confirm "Proceed?"; then
-        echo "Aborted."
-        return 1
-    fi
+    case "$proceed_mode" in
+        yes) ;;  # skip prompt
+        no)  echo "Aborted (--no)."; return 1 ;;
+        ask) if ! confirm "Proceed?"; then
+                 echo "Aborted."
+                 return 1
+             fi ;;
+    esac
 
     # GC old experiment subvols beyond retention. We do this BEFORE
     # the new ones so a failed experiment-on doesn't lose old

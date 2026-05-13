@@ -50,12 +50,27 @@ TTYPath=/dev/tty1
 StandardInput=tty
 StandardOutput=journal
 
-# Qt EGLFS direct-to-KMS, ALSA audio backend (matches Kodi so the
-# AVR doesn't see a format change at handoff). Qt auto-detects
-# /dev/dri/cardN; no QT_QPA_EGLFS_KMS_CONFIG needed on this hardware.
+# Qt EGLFS direct-to-KMS. Qt auto-detects /dev/dri/cardN; no
+# QT_QPA_EGLFS_KMS_CONFIG needed on this hardware.
 Environment=QT_QPA_PLATFORM=eglfs
 Environment=QT_QPA_EGLFS_INTEGRATION=eglfs_kms
-Environment=QT_MEDIA_BACKEND=alsa
+
+# Force SDL's audio backend to ALSA. moonlight-qt uses SDL (not Qt
+# Multimedia) for the streaming audio path, so QT_MEDIA_BACKEND=alsa
+# is a no-op here — SDL's own selection logic is what matters.
+#
+# Without this, SDL probes PipeWire first. PipeWire is intentionally
+# absent from this image (see README → Audio: ALSA-direct for
+# lossless TrueHD/DTS-HD passthrough), so the probe fails. SDL falls
+# back to ALSA — but the libpipewire client lib leaks a pw_loop on
+# every failed probe, and moonlight retries audio open ~once a
+# second forever when it can't reach the device. After ~50 retries
+# glibc trips a heap consistency check and SIGABRTs the AudioDec
+# thread. Setting SDL_AUDIO_DRIVER=alsa skips the PipeWire probe
+# entirely. Discovered by experiment 2026-05-13; see
+# /etc/asound.conf for the matching device-routing config that lets
+# SDL's "default" PCM open actually reach the HDMI/AVR sink.
+Environment=SDL_AUDIO_DRIVER=alsa
 
 # Arch's moonlight-qt package installs the binary as plain
 # /usr/bin/moonlight (no -qt suffix), despite the package name.

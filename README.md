@@ -777,6 +777,12 @@ Rootfs (`mkosi.extra/`):
   auth, so the Kodi launcher addon (in ha-config/kodi/) can fire it.
   Scoped narrowly to that one user + that one unit + the
   manage-units action.
+- `etc/asound.conf`: routes ALSA `default` PCM through `dmix` to
+  the HDMI/AVR sink so Kodi nav sounds can mix with main playback
+  and so moonlight (which opens `default` and has no UI for picking
+  a device) reaches HDMI. Kodi's bitstream passthrough opens the
+  hw device explicitly and bypasses dmix entirely. See
+  README → Audio.
 - Kodi vendor addons at `usr/share/kodi/addons/`: `service.avr.volume`,
   `script.theatre.lights.toggle`, `plugin.video.watchlist`,
   `context.go.to.show`, `repository.jellyfin.kodi`, `script.module.yaml`,
@@ -917,14 +923,66 @@ formats in the same stack is asking for couch debugging.
 
 Configuration:
 - Kodi: `AE_SINK=ALSA`, audio device set to the HDMI sink directly
-  (`hw:CARD=HDMI,DEV=0` or whatever the AVR outputs as).
-- moonlight-qt: also via ALSA (Qt audio backend forced to ALSA, not
-  PulseAudio compat).
+  (`hdmi:CARD=PCH,DEV=0` on the T480), passthrough device set to the
+  same path. This means **Kodi's passthrough output goes straight to
+  the hw device** and is unaffected by anything we do to the ALSA
+  `default` PCM. That's load-bearing — see the asound.conf below.
+- moonlight-qt: opens ALSA via SDL3 (not Qt Multimedia — moonlight's
+  audio path is SDL, so `QT_MEDIA_BACKEND=alsa` is a no-op here, and
+  setting it was a red herring during initial testing). moonlight-qt
+  has no UI for picking a device and just opens ALSA `default`,
+  which is why we need an `asound.conf` to route `default` to the
+  HDMI sink.
 
-ALSA hardware devices don't support concurrent access, so the
-VT-switch handoff covers audio for free: whoever owns the active VT
-holds the HDMI device. Kodi releases it on switch-away, moonlight
-takes it; reverse on switch-back.
+`/etc/asound.conf` (shipped at `mkosi.extra/etc/asound.conf`)
+routes `default` → `dmix` → `hw:1,3` (HDMI/AVR). dmix not `hw`,
+because Kodi opens `default` for **multiple concurrent streams** —
+main playback AND nav-sound effects — and `type hw` is exclusive
+single-stream (a second open returns EBUSY and nav sounds stay
+silent). dmix mixes streams in software before handing them to the
+underlying hw device.
+
+The dmix slave is pinned to 48k/S16/stereo. That's fine for nav
+sounds and Wolf's Opus output (moonlight stream audio). Anything
+that needs more — multichannel PCM, higher rates, bitstream
+passthrough — must address the hw device directly. Kodi's
+passthrough already does (per the explicit
+`audiooutput.passthroughdevice` setting above), so dmix never
+touches a TrueHD/DTS-HD bitstream. Verified: Dolby Digital
+passthrough still lights up the AVR's DD indicator with this
+config in place.
+
+Card index `1` rather than name `PCH` because ALSA name resolution
+(`snd_func_card_inum`) needs read access to the controlC1 control
+device, which logind grants via ACL only to processes in the active
+seat session. Index works for any process with `/dev/snd` read
+access, simplifying debugging from non-seat shells. Card index is
+stable on this hardware (the only other card is USB at index 0).
+
+Two related must-haves on `theatre-os-moonlight.service`:
+
+- `Environment=SDL_AUDIO_DRIVER=alsa`. Without this, SDL probes
+  PipeWire first; PipeWire is intentionally absent (per the
+  philosophy above), so the probe fails. SDL falls back to ALSA,
+  but the libpipewire client lib leaks a `pw_loop` on every failed
+  probe, and moonlight's audio path retries audio-open ~once a
+  second when it can't reach the device. After ~50 retries glibc
+  trips a heap consistency check and SIGABRTs the AudioDec thread.
+  Setting `SDL_AUDIO_DRIVER=alsa` skips the PipeWire probe
+  entirely. (Even with the asound.conf above, this env var is
+  necessary as defence in depth — anything that breaks the ALSA
+  open path would otherwise re-trigger the same crash.)
+- `QT_MEDIA_BACKEND=alsa` is **not** set. It looks load-bearing
+  but isn't — moonlight's streaming audio path goes through SDL,
+  not Qt Multimedia. Earlier versions of this unit set it; removed
+  to avoid suggesting it's the relevant lever.
+
+ALSA hardware devices don't support concurrent access at the hw
+level, but Kodi and moonlight never run concurrently anyway —
+`Conflicts=kodi-gbm.service` on the moonlight unit guarantees the
+display-and-audio handoff is sequential. dmix is for *intra-app*
+mixing (Kodi main + nav sounds), not for sharing between Kodi and
+moonlight.
 
 Trade-off: no Bluetooth audio output (PipeWire is the modern BT audio
 stack). Acceptable for a couch-AVR HTPC. If we ever wanted BT headphones,
@@ -1000,8 +1058,12 @@ device automations.
 - Kodi's behaviour on DRM master loss (should be clean; verify).
 - moonlight-qt EGLFS picking the right tty + DRM card (set
   `QT_QPA_EGLFS_KMS_CONFIG` JSON if it doesn't auto-detect).
-- moonlight-qt forced to ALSA backend (Qt may default to PulseAudio
-  compat; need to set `QT_MEDIA_BACKEND` or equivalent).
+- ~~moonlight-qt forced to ALSA backend (Qt may default to
+  PulseAudio compat; need to set `QT_MEDIA_BACKEND` or equivalent).~~
+  Resolved 2026-05-13: moonlight uses SDL not Qt Multimedia for
+  audio; the relevant lever is `SDL_AUDIO_DRIVER=alsa` on the
+  unit, plus an `/etc/asound.conf` routing `default` → `dmix` →
+  HDMI hw device. See Audio above.
 - HDMI device exclusive-access handoff between Kodi and moonlight
   across the VT switch.
 - HDR / refresh-rate state restoration when control returns to Kodi

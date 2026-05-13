@@ -783,8 +783,14 @@ Rootfs (`mkosi.extra/`):
   `script.module.iso8601`. Read by Kodi as
   system addons; no SQLite registration required.
 - Kodi system keymaps at `usr/share/kodi/system/keymaps/`:
-  `avr_volume.xml`, `no_chapter_skip.xml`, `theatre_credits_lights.xml`.
+  `zz_avr_volume.xml`, `no_chapter_skip.xml`, `theatre_credits_lights.xml`.
   Loaded before userdata keymaps; userdata can still override per-key.
+  The `zz_` prefix on the AVR keymap forces it to load *after* Kodi's
+  built-in `keyboard.xml` and `remote.xml` so its `<volume_up>` /
+  `<volume_down>` / `<volume_mute>` overrides win — Kodi processes
+  system keymaps in alphabetical order with later files overriding
+  earlier ones, and the built-ins re-bind the same keys to Kodi's
+  internal `VolumeUp`/`VolumeDown`/`Mute` actions.
 
 Top-level `mkosi.finalize` creates the `/system/data`,
 `/system/persist`, `/efi`, and `/home/kodi` mountpoint stubs in the
@@ -949,8 +955,10 @@ separately.
   module addons that HAKA depends on. Vendored as opaque blobs
   (repackaged Kodi addons of upstream PyYAML / iso8601). Bumped only
   if HAKA needs a newer version.
-- `system/keymaps/avr_volume.xml` — maps volume keys to AVR volume
-  service calls.
+- `system/keymaps/zz_avr_volume.xml` — maps volume keys to AVR volume
+  service calls. The `zz_` prefix forces alphabetical load order to
+  beat Kodi's built-in `keyboard.xml` / `remote.xml` (which would
+  otherwise re-bind the volume keys to Kodi's internal volume).
 - `system/keymaps/no_chapter_skip.xml` — disables accidental chapter skip.
 - `system/keymaps/theatre_credits_lights.xml` — dims lights on credits
   via HA keymap action.

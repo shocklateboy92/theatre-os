@@ -952,12 +952,22 @@ touches a TrueHD/DTS-HD bitstream. Verified: Dolby Digital
 passthrough still lights up the AVR's DD indicator with this
 config in place.
 
-Card index `1` rather than name `PCH` because ALSA name resolution
-(`snd_func_card_inum`) needs read access to the controlC1 control
-device, which logind grants via ACL only to processes in the active
-seat session. Index works for any process with `/dev/snd` read
-access, simplifying debugging from non-seat shells. Card index is
-stable on this hardware (the only other card is USB at index 0).
+Card identifier `CARD=PCH` rather than numeric index, because card
+indices are NOT stable on this hardware: plugging in a USB audio
+device (e.g. the dock's Hybrid USB-C audio chip) shifts every card
+number, and a hardcoded `hw:1,3` reference no longer points at the
+HDMI sink. The kernel's persistent card name (set by `snd-hda-intel`
+from the codec name) doesn't drift across boots or dock changes.
+
+The trade-off is that name resolution (`snd_func_card_inum`) needs
+read access to the matching control device (`controlCN`), which
+logind grants via ACL only to processes in the active seat session.
+In practice this is fine: both `kodi-gbm.service` and
+`theatre-os-moonlight.service` use `PAMName=login` and run in real
+seat sessions, so they get the ACL automatically. Debugging from a
+non-seat shell (`sudo -u kodi aplay …`) won't work, which I learned
+the hard way by initially shipping an index-based config that I
+"verified" from one such shell — see commit history.
 
 Two related must-haves on `theatre-os-moonlight.service`:
 

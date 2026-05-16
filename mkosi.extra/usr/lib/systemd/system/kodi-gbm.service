@@ -71,6 +71,18 @@ ExecStart=/usr/lib/kodi/kodi.bin --standalone
 Restart=on-abort
 StandardInput=tty
 StandardOutput=journal
+# Match LibreELEC's baseline (packages/mediacenter/kodi/system.d/
+# kodi.service): the systemd default soft limit of 1024 is too low
+# for Kodi's typical workload (many addons keep DB/socket FDs open).
+# In particular, plugin.video.themoviedb.helper leaks SQLite FDs
+# rapidly enough to exhaust 1024 within a single browsing session,
+# at which point Mesa's eglDupNativeFenceFDANDROID starts failing
+# (dup() returns EMFILE) and Kodi spams "failed to duplicate EGL
+# fence fd" + "atomic commit failed: Device or resource busy" with
+# heavy on-screen artifacts, eventually aborting via Python when an
+# addon hits OSError: [Errno 24]. 16384 mirrors the value LibreELEC
+# / CoreELEC ship and is a normal Kodi baseline, not a workaround.
+LimitNOFILE=16384
 
 [Install]
 Alias=display-manager.service

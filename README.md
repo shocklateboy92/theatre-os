@@ -37,9 +37,10 @@ moonlight-qt launches from within Kodi for game streaming.
   boot mode that snapshots `@os/<v>` and `@persist/<v>` to writable
   throwaway subvolumes — see "Updates & experiment mode".
 - **Display**: Kodi runs gbm-direct (no compositor → refresh-rate
-  switching works). moonlight-qt launches via Qt EGLFS/KMS, also
-  compositor-free. Quit-and-relaunch handoff between them, same as
-  LibreELEC.
+  switching works). moonlight-qt runs as a wayland client under a
+  minimal sway session (lower latency than EGLFS on this hardware,
+  see Kodi & moonlight session). Quit-and-relaunch handoff between
+  Kodi and the sway-moonlight session, same shape as LibreELEC.
 
 Reference implementations:
 - [`systemd/particleos`](https://github.com/systemd/particleos) — mkosi
@@ -102,6 +103,61 @@ ZBook and may need to be reimplemented on theatre-os if equivalent
 hardware/features come back. Most of the *implementation* tweaks in
 that doc are dock/USB-NIC specific to the ZBook and won't port
 directly.
+
+## Power management
+
+The T480 lives plugged in 24/7 in the AV cabinet. We don't suspend
+in normal operation — Kodi sits idle on tty1 and wakes are user-
+initiated via the remote, not S3 wake. Idle draw is ~9 W
+whole-system (~3.5 W package), fan typically off or at the EC's
+lowest curve. AMT handles the rare hard-reset case.
+
+### Battery charge thresholds
+
+The internal BAT0 (and the swappable BAT1 if installed) are pinned
+to a **40%–60% SoC band** via a udev rule at
+`mkosi.extra/usr/lib/udev/rules.d/50-charge-thresholds.rules`.
+
+Rationale: lithium cells degrade fastest when floated at high SoC,
+especially at slightly elevated temperatures (which the AV cabinet
+provides). A laptop wired to AC permanently has no use for the top
+40% of battery capacity — the cell's only job is to bridge transient
+power blips, not to provide runtime. Keeping the cell mid-SoC
+extends calendar life by years and is the single most impactful
+change you can make for a laptop-as-server.
+
+We learned this the hard way: BAT0 had reached 73% of design
+capacity in only 72 cycles before this was applied — roughly 3x
+faster wear than expected, the float-at-100% penalty showing up.
+
+Implementation choice — **udev rule, not `tmpfiles.d` or a oneshot
+service**:
+
+- `charge_control_{start,end}_threshold` are power_supply subsystem
+  attributes; udev is the systemd-native mechanism for reacting to
+  device events and setting per-device attributes.
+- Event-driven: fires when each `BAT*` device enumerates (which may
+  be different times for internal vs. swappable batteries), fires
+  again on resume from suspend if the EC reset the thresholds (some
+  firmware does this; the T480's didn't in testing but the rule
+  costs nothing).
+- No-ops cleanly when a battery is absent — a `tmpfiles.d` snippet
+  would fail loudly if BAT1 was removed.
+- `ATTR{type}=="Battery"` filter avoids accidentally writing to
+  other devices in the `power_supply` subsystem (the AC adapter,
+  the dock's USB-PD controllers exposed as
+  `ucsi-source-psy-USBC000:*`, any USB-charged peripheral plugged
+  into the dock).
+- Write order in the rule matters: kernel rejects `start > end` and
+  `end < start`. Setting start first (40, always ≤ current end of
+  100) then end (60, now ≥ new start of 40) keeps both writes
+  valid. The rule writes them in this order.
+
+After the rule lands, current charge levels don't snap to 60%
+immediately — they sit wherever they were until natural
+self-discharge brings them under 40%, at which point charging
+resumes up to 60%. Expect "still at 95%" for a week or two after
+first applying; not a bug.
 
 ## Iteration loop
 
@@ -763,8 +819,11 @@ Rootfs (`mkosi.extra/`):
 - `sysusers.d/kodi.conf` defining the `kodi` user with pinned UID/GID
   420 and home `/home/kodi` (overriding upstream's `/var/lib/kodi`).
 - `tmpfiles.d/kodi.conf` ensuring `/home/kodi` is `0755 kodi:kodi`
-  on every boot (the bind-mount target inside `@persist/<v>` is
-  pre-created by repart but with no ownership guarantees).
+   on every boot (the bind-mount target inside `@persist/<v>` is
+   pre-created by repart but with no ownership guarantees).
+- `udev/rules.d/50-charge-thresholds.rules` pinning BAT0+BAT1 charge
+   thresholds to 40%–60% on enumeration. See README → Power
+   management.
 - `usr/lib/systemd/system/theatre-os-moonlight.service`: starts
   moonlight as the kodi user with the same logind-session shape
   as kodi-gbm (PAMName=login, TTYPath=/dev/tty1) so it gets seat-
@@ -825,8 +884,15 @@ No generators, no overlayfs, no exotic machinery; total LoC small.
 
 Kodi is the shell. moonlight-qt is launched from inside Kodi for game
 streaming and gives the display fully back to Kodi when the user quits
-moonlight. Both run compositor-free (gbm/EGLFS direct to KMS) so
-refresh-rate and HDR switching work, matching LibreELEC's behaviour.
+moonlight. Kodi runs compositor-free (gbm direct to KMS) so refresh-rate
+and HDR switching work, matching LibreELEC's behaviour. moonlight runs
+as a wayland client under a minimal sway session — *not* compositor-free
+— because Qt EGLFS adds ~one frame (~12-17ms) of compositor latency to
+the video path on Intel iGPUs, while sway lets moonlight's VAAPI dmabufs
+go to a KMS plane via wlroots and exposes `allow_tearing` +
+`max_render_time` tunables. Measured 2-6ms render-incl-vsync on T480
+UHD 620 under sway vs 12-17ms under EGLFS (2026-05-24). See
+`/etc/sway/config` for the tunables.
 
 ### Display ownership: stop-and-start handoff
 
@@ -882,12 +948,29 @@ tears down or comes back up. Acceptable for a handoff that happens
 once per gaming session, not per-frame. LibreELEC's retroarch
 addon uses the same stop-and-start pattern for the same reason.
 
-Trade-off rejected: keeping Kodi running and overlaying moonlight
-via a Wayland compositor (cage, gamescope) would skip the visible
-gap, but requires switching Kodi to wayland windowing — which
-breaks our gbm-direct refresh-rate switching, and the lossless
-audio passthrough story leans on ALSA-direct (see Audio below).
-Not worth it.
+Trade-off rejected: switching Kodi to wayland too (so a single
+compositor hosts both Kodi and moonlight as windows and the handoff
+becomes a window-swap with no DRM master juggling). Kodi-gbm is what
+gives us refresh-rate and HDR switching on Linux's open driver stack;
+moving Kodi to wayland would either lose that or require a heavier
+compositor that handles mode-switching, and Kodi's own wayland support
+is still maturing. The stop-and-start handoff is ~5s of black screen
+once per gaming session, which is fine. moonlight specifically *does*
+need a compositor (sway) because Qt EGLFS adds too much latency to
+the video path — but moonlight is the new tenant, not Kodi, so we
+adopt the compositor just for it.
+
+Trade-off rejected: using cage instead of sway for the moonlight
+compositor. Cage is the obvious "minimal kiosk compositor" and we
+tried it first. It works architecturally but swallows stderr (no
+journal output, had to wrap the moonlight launch to get any logging
+at all during debugging), and its small userbase means fewer eyes on
+the wlroots-moonlight code path. Sway is built on the same wlroots
+but has real logging, a config file that documents intent, IPC for
+runtime inspection (`swaymsg -t get_tree`), and the gaming-on-wayland
+community has battle-tested the relevant code paths. The cost is
+~2k extra LoC of features we don't use (workspaces, IPC, keybinds),
+which sit dormant.
 
 Trade-off rejected: switching Kodi to X11. X-on-tty7 does
 relinquish DRM master cleanly on VT switch. But Kodi-x11 loses
@@ -1066,8 +1149,10 @@ device automations.
 ### Risks to verify on real hardware
 
 - Kodi's behaviour on DRM master loss (should be clean; verify).
-- moonlight-qt EGLFS picking the right tty + DRM card (set
-  `QT_QPA_EGLFS_KMS_CONFIG` JSON if it doesn't auto-detect).
+- ~~moonlight-qt EGLFS picking the right tty + DRM card (set
+  `QT_QPA_EGLFS_KMS_CONFIG` JSON if it doesn't auto-detect).~~
+  No longer applicable — moonlight runs under sway as a wayland
+  client, not via EGLFS. See Kodi & moonlight session above.
 - ~~moonlight-qt forced to ALSA backend (Qt may default to
   PulseAudio compat; need to set `QT_MEDIA_BACKEND` or equivalent).~~
   Resolved 2026-05-13: moonlight uses SDL not Qt Multimedia for

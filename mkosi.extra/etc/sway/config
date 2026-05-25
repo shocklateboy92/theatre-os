@@ -1,0 +1,60 @@
+# theatre-os: minimal sway config to host moonlight-qt as a single
+# fullscreen wayland client, with latency tuning.
+#
+# Location: this file ships in the OS image at /etc/sway/config.
+# Sway's config search order is ~/.sway/config, ~/.config/sway/config,
+# /etc/sway/config, /etc/xdg/sway/config; with no per-user override
+# (and there isn't one — /home/kodi is a bind-mounted persist subvol
+# that ships empty), sway falls back here. Editing this file requires
+# a new image (the iteration loop); for live experiments, drop a copy
+# into /home/kodi/.config/sway/config in experiment mode and it'll
+# take precedence.
+#
+# Why sway (not cage, not EGLFS): see README → Kodi & moonlight
+# session. Short version: EGLFS makes Qt own the display and forces
+# every video frame through a GL composite (+~12-17ms). Sway lets
+# moonlight's VAAPI dmabufs go to a KMS plane via wlroots, with two
+# additional knobs (allow_tearing, max_render_time) that EGLFS and
+# cage don't expose. Measured 2-6ms render-incl-vsync on this
+# hardware vs 12-17ms on EGLFS.
+#
+# Cage was the obvious "minimal kiosk compositor" choice, but it
+# swallows stderr (no journal output) and its smaller userbase
+# means fewer eyes on the wlroots-moonlight code path. Sway has
+# real logging, the same wlroots underneath, and the gaming-on-
+# wayland community has battle-tested it.
+
+# Take whatever output is connected; let moonlight pick the mode.
+# adaptive_sync off: AVR/projector chain doesn't speak VRR cleanly.
+# max_render_time 2: wake compositor 2ms before vsync to composite
+#   and hit the *current* vsync instead of the next one. Saves
+#   ~one frame of latency on the compositor side. Conservative; if
+#   we miss the deadline (jitter) we'd see frame drops. 2ms is
+#   plenty for compositing a single fullscreen surface on an
+#   Intel iGPU.
+output * adaptive_sync off max_render_time 2
+
+# Every window: fullscreen, no border, allow tearing.
+# allow_tearing: submits buffers immediately on present instead of
+#   waiting for vblank. The wayland equivalent of "V-Sync off" but
+#   per-window and enforced by the compositor (which is the layer
+#   that actually decides when the page flip happens). For moonlight
+#   this means decoded frames go to scanout the moment they're
+#   ready. We can't see tearing in practice — first-person content
+#   on a 200" projector with moderate camera motion hides it.
+for_window [shell=".*"] fullscreen enable, border none, allow_tearing enable
+
+# Recovery escape hatch in case moonlight wedges and a keyboard is
+# attached: Mod4+Shift+q kills sway, which exits this unit, which
+# brings kodi-gbm back via ExecStopPost on the unit.
+set $mod Mod4
+bindsym $mod+Shift+q exec swaymsg exit
+
+# Launch moonlight at startup. When it exits (clean quit, SIGINT,
+# crash), exit sway too — that makes the systemd unit go inactive
+# and kodi-gbm starts back up automatically.
+#
+# /usr/bin/moonlight is moonlight-qt (Arch's package name vs binary
+# name mismatch). The unit sets QT_QPA_PLATFORM=wayland so Qt talks
+# to sway's wayland socket instead of falling back to EGLFS.
+exec /usr/bin/moonlight && swaymsg exit

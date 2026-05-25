@@ -50,10 +50,24 @@ TTYPath=/dev/tty1
 StandardInput=tty
 StandardOutput=journal
 
-# Qt EGLFS direct-to-KMS. Qt auto-detects /dev/dri/cardN; no
-# QT_QPA_EGLFS_KMS_CONFIG needed on this hardware.
-Environment=QT_QPA_PLATFORM=eglfs
-Environment=QT_QPA_EGLFS_INTEGRATION=eglfs_kms
+# moonlight runs as a wayland client under sway, NOT via Qt EGLFS.
+# Why: EGLFS makes Qt own the display directly via KMS, which means
+# every video frame goes through Qt's GL compositor — an extra GPU
+# pass that added ~one frame (12-17ms) of latency to the moonlight
+# stats overlay's "render incl. vsync" reading on this hardware
+# (Intel UHD 620). Under sway, moonlight's VAAPI-decoded NV12
+# dmabufs go via wlroots's GL render straight to a KMS plane; we
+# measured 2-6ms render-incl-vsync on the same hardware after the
+# switch, ~one frame saved. Discovered by experiment 2026-05-24.
+#
+# Sway-specific tunables for further latency reduction live in
+# /home/kodi/.config/sway/config (allow_tearing + max_render_time).
+# See README → Kodi & moonlight session.
+#
+# Qt's wayland platform plugin is what makes Qt talk to sway's
+# wayland socket (instead of falling back to EGLFS when neither
+# wayland nor X11 is detected at startup).
+Environment=QT_QPA_PLATFORM=wayland
 
 # Force SDL's audio backend to ALSA. moonlight-qt uses SDL (not Qt
 # Multimedia) for the streaming audio path, so QT_MEDIA_BACKEND=alsa
@@ -72,9 +86,16 @@ Environment=QT_QPA_EGLFS_INTEGRATION=eglfs_kms
 # SDL's "default" PCM open actually reach the HDMI/AVR sink.
 Environment=SDL_AUDIO_DRIVER=alsa
 
+# Launch moonlight via sway. Sway reads /home/kodi/.config/sway/config
+# which fullscreens any window, enables allow_tearing + max_render_time
+# on the moonlight surface for minimum latency, and exits when moonlight
+# exits (so this unit goes inactive and kodi-gbm comes back via the
+# ExecStopPost below).
+#
 # Arch's moonlight-qt package installs the binary as plain
-# /usr/bin/moonlight (no -qt suffix), despite the package name.
-ExecStart=/usr/bin/moonlight
+# /usr/bin/moonlight (no -qt suffix), despite the package name; the
+# sway config invokes it by that path.
+ExecStart=/usr/bin/sway
 
 # Bring Kodi back when moonlight goes away, regardless of how
 # (clean quit from the UI, SIGINT, crash). --no-block prevents the
@@ -88,9 +109,9 @@ ExecStopPost=+/usr/bin/systemctl --no-block start kodi-gbm.service
 # admin's intent. Normal user-quit-from-UI exits 0 anyway.
 SuccessExitStatus=SIGINT SIGTERM
 
-# If moonlight ignores SIGTERM (Qt apps sometimes do under EGLFS
-# with no window focus), don't leave the screen black for the
-# default 90s before SIGKILL kicks in.
+# If sway/moonlight ignore SIGTERM (Qt apps sometimes do when the
+# wayland connection is in a weird state), don't leave the screen
+# black for the default 90s before SIGKILL kicks in.
 TimeoutStopSec=10s
 
 [Install]

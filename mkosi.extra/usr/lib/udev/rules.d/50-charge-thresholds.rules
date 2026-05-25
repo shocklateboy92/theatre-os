@@ -1,0 +1,21 @@
+# Limit battery charge to 40-60% to minimise wear on an always-on machine.
+#
+# The T480 sits plugged in 24/7 in the AV cabinet; the battery's only job
+# is to bridge transient power blips, not to power the laptop on the go.
+# Lithium cells last dramatically longer if kept in the middle of their
+# SoC range rather than floated at 100%. See README's "Power management"
+# section for the full rationale.
+#
+# We use a udev rule rather than tmpfiles.d because charge_control_*
+# are power_supply subsystem attributes, and udev handles the event
+# timing naturally (fires when each battery enumerates, fires again on
+# resume if the EC reset thresholds, no-ops cleanly if a battery is
+# absent). tmpfiles.d would run once at boot regardless of battery
+# presence and log an error if BAT1 was missing.
+#
+# Write order matters: kernel rejects start > current_end and end <
+# current_start. Setting start first (40, always <= current end of 100)
+# then end (60, now >= new start of 40) keeps both writes valid.
+ACTION=="add|change", SUBSYSTEM=="power_supply", ATTR{type}=="Battery", \
+  ATTR{charge_control_start_threshold}="40", \
+  ATTR{charge_control_end_threshold}="60"

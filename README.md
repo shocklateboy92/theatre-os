@@ -992,6 +992,40 @@ binding feels right. The polkit rule at
 `mkosi.extra/etc/polkit-1/rules.d/10-theatre-os-moonlight.rules`
 allows the `kodi` user to start that one specific unit without auth.
 
+### Watchdog: long-press power → restart Kodi
+
+Kodi doesn't always recover gracefully from display-state changes
+(projector off at boot, AVR HDMI handshake confusion, mode switch
+mid-session). When this happens you're left with a black screen or
+frozen UI and no obvious way back without SSHing in.
+
+The escape hatch: hold the remote's power button for ≥3 seconds.
+A small daemon (`theatre-os-kodi-watchdog.service`, source at
+`/usr/lib/theatre-os/kodi-watchdog.py`) watches every
+`/dev/input/event*` device that advertises `KEY_POWER` capability
+and runs `systemctl restart kodi-gbm.service` on long-press. The
+restart works regardless of who currently holds DRM master — if
+sway/moonlight is up, the moonlight unit's `Conflicts=kodi-gbm.service`
+machinery stops it first; if Kodi is up, restart cycles it.
+
+Mechanics worth knowing:
+
+- **Runs as root.** ~30 lines of Python, hardcoded to one action
+  (`systemctl restart` of one specific unit). The privilege-juggling
+  alternatives (unprivileged user + polkit) add real complexity to
+  defend against threats that don't apply at this scope. Less code
+  > less privilege when both are small.
+- **Hot-plug aware** via pyudev — unplugging and replugging the
+  remote's dongle doesn't require a service restart.
+- **Safe re: logind.** `HandlePowerKey=ignore` +
+  `HandlePowerKeyLongPress=ignore` are set in
+  `10-ignore-power-key.conf`, so KEY_POWER doesn't also trigger
+  shutdown via logind's default policy.
+- **No conflict with the in-stream quit combo.** Moonlight's own
+  controller escape (Start+Back+LB+RB held ~5s) exits the stream
+  cleanly back to its launcher; this watchdog is for when the whole
+  stack is stuck, not for normal session exits.
+
 ### Audio
 
 **ALSA-direct for both Kodi and moonlight. No PipeWire, no PulseAudio,

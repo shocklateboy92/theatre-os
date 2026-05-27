@@ -1,0 +1,35 @@
+# theatre-os: TCP socket for the recovery channel.
+#
+# Listens on :9091/tcp. Each connection spawns one instance of
+# theatre-os-recovery@.service (per Accept=yes), which reads one command
+# line, runs it, writes one response line, exits. systemd handles the
+# accept() / bind() / fd-passing.
+#
+# Why a socket unit (not a long-running daemon): zero process running
+# when nobody's connecting, automatic restart-on-crash via systemd's
+# usual machinery, no port-binding race at boot, no need to write any
+# server-loop code. The handler script is straight-line shell.
+#
+# Trust model + protocol details: see /usr/lib/theatre-os/recovery-handler.sh
+# and README → Kodi & moonlight session → Recovery channel.
+
+[Unit]
+Description=Theatre-os recovery channel socket
+# Bind early so HA's probes after a reboot don't race the socket coming
+# up. sysinit.target is "kernel and storage ready" — well before kodi
+# and any networking-dependent stuff.
+After=sysinit.target
+Before=sockets.target
+
+[Socket]
+ListenStream=9091
+# One service instance per connection. Each instance gets the connected
+# socket as stdin/stdout (per StandardInput=socket on the @.service).
+Accept=yes
+# Cap concurrent in-flight requests. The handler is fast (<1s for PING,
+# a few seconds for RESTART) so a low cap is fine and prevents a noisy
+# client from spawning unbounded processes.
+MaxConnections=8
+
+[Install]
+WantedBy=sockets.target

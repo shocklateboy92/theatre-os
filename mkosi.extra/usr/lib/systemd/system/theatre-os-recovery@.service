@@ -1,0 +1,28 @@
+# theatre-os: per-connection handler for the recovery channel.
+#
+# Instantiated by theatre-os-recovery.socket (Accept=yes) — one
+# instance per TCP connection. Reads one command from the socket
+# (stdin), runs it, writes the response back (stdout), exits.
+#
+# Runs as root because RESTART has to call `systemctl restart
+# kodi-gbm.service` which requires the privileges to manage a system
+# unit. The handler is ~30 lines of shell with a fixed allowlist of
+# commands; the attack surface is the trust we already give anyone on
+# the LAN per the README's recovery channel section.
+
+[Unit]
+Description=Theatre-os recovery channel handler (per-connection)
+
+[Service]
+Type=oneshot
+# stdin = the connected socket (where we read the command). stdout =
+# the same socket (where we write the response). systemd handles the
+# fd passing.
+StandardInput=socket
+StandardOutput=socket
+# If a client connects but never sends a line, the read in the handler
+# blocks forever. Cap the whole service at 10s so we don't accumulate
+# stuck handlers from misbehaving clients. systemctl restart takes a
+# few seconds at most; 10s is generous.
+TimeoutStartSec=10s
+ExecStart=/usr/lib/theatre-os/recovery-handler.sh

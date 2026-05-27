@@ -992,6 +992,71 @@ binding feels right. The polkit rule at
 `mkosi.extra/etc/polkit-1/rules.d/10-theatre-os-moonlight.rules`
 allows the `kodi` user to start that one specific unit without auth.
 
+### Recovery channel
+
+For when Kodi gets confused by a display-state change (projector off
+at boot, AVR HDMI mode switch) and the on-screen UI is no longer
+usable, we expose a tiny out-of-band channel that lets a wall-mounted
+HA tablet force a Kodi restart without needing SSH or AMT.
+
+Architecture: a systemd-socket-activated TCP listener on port 9091.
+Each connection spawns a fresh oneshot handler (`Accept=yes`) that
+reads one command line from the socket, runs the action, writes one
+response line back. No long-running daemon, no HTTP framework, no
+authentication code — three files of systemd configuration plus a
+~30-line shell handler.
+
+Protocol (one round-trip per connection, line-oriented text):
+
+```
+→ PING        ← PONG                          (liveness probe)
+→ RESTART     ← OK                            (kodi-gbm cycled cleanly)
+              ← FAIL exit=N <systemctl err>   (systemctl failed)
+→ <other>     ← FAIL unknown command: <word>
+```
+
+Files:
+- `mkosi.extra/usr/lib/systemd/system/theatre-os-recovery.socket` —
+  the listener
+- `mkosi.extra/usr/lib/systemd/system/theatre-os-recovery@.service` —
+  per-connection oneshot
+- `mkosi.extra/usr/lib/theatre-os/recovery-handler.sh` — the command
+  dispatcher
+
+Trust model: **anyone on the LAN who can TCP-connect to :9091 can
+issue any of the supported commands.** Same trust boundary as the
+dufs PUT endpoint we use for image distribution (see top-level
+`AGENTS.md`). The blast radius of an unauthorized RESTART is one
+forced Kodi restart — annoying, not catastrophic. If untrusted
+devices ever appear on the LAN, the right fix is at the LAN
+perimeter, not by bolting authentication onto every internal
+endpoint.
+
+The HA side (in the `ha-config` repo) wires this into a dashboard:
+two buttons (Probe / Restart Kodi), two `input_text` entities
+showing the latest result + timestamp. The probe button issues PING
+and surfaces PONG / timeout; the restart button issues RESTART and
+surfaces the OK or FAIL response verbatim.
+
+This channel does NOT cover "the box is completely wedged at a
+kernel/network level" — in that case the recovery socket itself
+won't respond and HA will time out. The escape hatch for that is
+the dock's physical power button (hold ~10s to force off).
+
+Why this design over earlier alternatives we tried and rejected:
+- *In-process Kodi watchdog reading evdev* (see git history,
+  reverted): Kodi-gbm grabs every input device exclusively via
+  libinput's `EVIOCGRAB` and no other reader sees the events. No
+  runtime toggle in Kodi to disable the grab.
+- *SSH from HA with command="..." key restriction*: works but
+  introduces an SSH key to manage on the HA side, plus host-key
+  drift across image rebuilds. The socket approach has none of
+  that.
+- *HTTP daemon*: would need an HTTP framework or hand-rolled parser,
+  an auth scheme, request validation. systemd's `Accept=yes`
+  socket-activation does the per-connection plumbing for free, and
+  the line-oriented text protocol needs no framework.
+
 ### Audio
 
 **ALSA-direct for both Kodi and moonlight. No PipeWire, no PulseAudio,

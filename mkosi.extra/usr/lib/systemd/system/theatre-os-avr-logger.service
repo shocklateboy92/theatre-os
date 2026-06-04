@@ -1,0 +1,48 @@
+# theatre-os: stream Denon AVR async state events to the journal.
+#
+# Holds one persistent telnet connection to the AVR and timestamps
+# every state-change event it pushes (no polling). Used to correlate
+# AVR-side HDMI input/output renegotiations with Kodi playback stalls;
+# see /usr/lib/theatre-os/avr-event-logger.sh for what we capture and
+# why. View with: journalctl -u theatre-os-avr-logger -f
+#
+# Bound to network-online.target so we don't race the wired NIC at
+# boot. If the AVR is off or unreachable, the script exits non-zero,
+# RestartSec sleeps, and we try again — no harm done.
+
+[Unit]
+Description=Theatre-os Denon AVR event logger
+# We need DNS + the AVR's L2 reachable, which is whatever
+# network-online.target waits for (configured by 20-wired.network).
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/theatre-os/avr-event-logger
+# AVR connect failure (powered off, unreachable, etc.) exits non-zero
+# and we want to keep trying. 10s is short enough that a flapping AVR
+# still produces dense data; long enough that we don't hammer the
+# socket on a sustained outage.
+Restart=on-failure
+RestartSec=10s
+# No privileges needed — it's a TCP client.
+DynamicUser=yes
+# Hardening: this is a one-trick pony that only needs network egress
+# and to write to stdout (-> journal). Lock everything else down.
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

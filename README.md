@@ -290,6 +290,34 @@ LAN can issue commands; blast radius is one forced Kodi restart.
 Doesn't help if the box is kernel-wedged — fall back to the dock's
 physical power button.
 
+### AVR event logger
+
+`theatre-os-avr-logger.service` holds a persistent TCP control
+session to the Denon AVR on port 23 and timestamps every
+state-change event the receiver pushes (input switch, surround
+mode, audio format, HDMI input/output resolution, etc.) into the
+journal. Purpose is diagnostic correlation against Kodi: when a
+playback stall appears in `~kodi/.kodi/temp/kodi.log` as
+`OutputPicture - timeout waiting for buffer`, the AVR-side log
+tells us whether the HDMI link to the projector renegotiated
+(`SSINFSIGRES O...` changes → projector-cable issue), the HTPC
+input renegotiated (`SSINFSIGRES I...` / unexplained audio
+events → HTPC→AVR link), or nothing changed at all (issue is
+upstream of HDMI — GPU bottleneck or Kodi bug).
+
+Pure async, no polling: the AVR pushes one CR-terminated line per
+state change on its own. We send a single `PW?` at connect time so
+the journal records a sign-of-life before the AVR goes quiet. TCP
+keepalive is on so a half-open socket (post-suspend, NAT timeout)
+gets detected within a few minutes instead of blocking forever in
+`recv()`. On any socket error the script exits non-zero and
+systemd's `Restart=on-failure` + `RestartSec=10s` handles the
+reconnect.
+
+View: `journalctl -u theatre-os-avr-logger -f`. Correlate:
+`journalctl -u theatre-os-avr-logger --since '2h ago'` alongside
+`grep OutputPicture ~kodi/.kodi/temp/kodi.log`.
+
 ## Boot sequence
 
 UEFI → systemd-boot → selected UKI bundles kernel + initrd → the

@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""theatre-os: log Denon AVR async state events.
+
+The AVR exposes a persistent TCP control protocol on port 23. Once
+connected it pushes one CR-terminated event per state change: input
+switch, surround mode, audio format, HDMI input/output signal
+resolution, etc. We hold one socket open and timestamp + log
+everything that arrives (-> stdout -> journald via the unit).
+
+Used to correlate AVR-side events with Kodi playback stalls; in
+particular, SSINFSIGRES O... changes during a stall implicate the
+projector HDMI cable, while SSINFSIGRES I... or unexplained audio
+events implicate the HTPC->AVR HDMI link.
+
+Design notes:
+- No polling. The AVR is the producer of all events we care about;
+  one PW? query at connect time is the only thing we ever send.
+- TCP keepalive is on so we detect a half-open socket within ~minutes
+  rather than blocking forever in recv() (matters after a box
+  suspend/resume, or a network blip on either end).
+- On any socket error we exit non-zero so systemd's Restart= takes
+  over for backoff (keeps this script trivial).
+"""
+
+import os
+import socket
+import sys
+from datetime import datetime, timezone
+
+
+AVR_HOST = os.environ.get("AVR_HOST", "denon-avr-s970h.home.lasath.com")
+AVR_PORT = int(os.environ.get("AVR_PORT", "23"))
+CONNECT_TIMEOUT_S = 10
+
+
+def log(msg: str) -> None:
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    # Trim usec to msec for readability; full precision is overkill
+    # for human-scale movie-night events.
+    ts = ts[:23] + "Z"
+    print(f"{ts}  {msg}", flush=True)
+
+
+def main() -> int:
+    log(f"connecting to {AVR_HOST}:{AVR_PORT}")
+    try:
+        sock = socket.create_connection((AVR_HOST, AVR_PORT), timeout=CONNECT_TIMEOUT_S)
+    except OSError as e:
+        log(f"connect failed: {e}")
+        return 1
+
+    # TCP keepalive: probe an idle peer so we notice a half-open
+    # connection (peer crashed, NAT dropped state, our box was
+    # suspended too long, etc.). Tuning is generous — we don't want
+    # false reconnects during a quiet hour of the AVR being idle.
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 120)
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 30)
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 4)
+    # Clear the connect timeout — reads should block indefinitely
+    # waiting for the next async event. Keepalive handles death.
+    sock.settimeout(None)
+    log("connected")
+
+    # Kick the AVR with one harmless query so the next line in the log
+    # confirms the AVR is reachable, not just that the TCP handshake
+    # worked. Otherwise an AVR that's powered on but app-frozen would
+    # look identical to a healthy one until something happened to it.
+    try:
+        sock.sendall(b"PW?\r")
+    except OSError as e:
+        log(f"initial query failed: {e}")
+        return 1
+
+    # AVR events are CR-terminated (no LF). recv() gives us byte
+    # chunks; buffer and split on CR ourselves.
+    buf = bytearray()
+    try:
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                log("connection closed by peer")
+                return 1
+            buf.extend(chunk)
+            while b"\r" in buf:
+                line, _, rest = buf.partition(b"\r")
+                buf = bytearray(rest)
+                # Some multi-line responses ride along with embedded
+                # LFs (e.g. SYSDA); drop them so each log line is one
+                # logical event.
+                text = line.replace(b"\n", b"").decode("ascii", errors="replace")
+                if text:
+                    log(text)
+    except OSError as e:
+        log(f"recv error: {e}")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -6,12 +6,21 @@
 #
 # @VERSION@ is substituted at build time by
 # mkosi.images/initrd/mkosi.finalize.
+#
+# Requires/After=theatre-os-persist-snapshot.service: that oneshot
+# (ordered After=sysroot-system-data.mount) reads
+# /system/data/last-booted-version and ensures @persist/@VERSION@
+# exists — snapshotted from @persist/<last-booted> on the first boot
+# of a new version, created empty as a last resort, or already present
+# (the common case). Without it having run first, this mount would
+# fail on the first boot after a sysupdate (the subvol doesn't exist
+# yet) and drop the box to emergency.
 
 [Unit]
 Description=theatre-os persist (@persist/@VERSION@) (initrd-side)
 DefaultDependencies=no
-Requires=sysroot-system-data.mount
-After=sysroot-system-data.mount
+Requires=sysroot-system-data.mount theatre-os-persist-snapshot.service
+After=sysroot-system-data.mount theatre-os-persist-snapshot.service
 Before=initrd-fs.target
 
 [Mount]

@@ -1,0 +1,40 @@
+# Ensure /sysroot/system/persist's backing btrfs subvol —
+# @persist/<IMAGE_VERSION> — exists before sysroot-system-persist.mount
+# tries to attach it. Runs in the initrd. See
+# /usr/lib/theatre-os/snapshot.sh for the model.
+#
+# Ordered After=sysroot-system-data.mount (we need /sysroot/system/data
+# with subvolid=5 mounted to see @persist/ and last-booted-version) and
+# Before=sysroot-system-persist.mount (the mount unit that consumes our
+# work). sysroot-system-persist.mount's Requires= pulls us in
+# transitively when something needs the persist subvol.
+#
+# The work is in /usr/lib/theatre-os/snapshot.sh — shipped as a real
+# script (greppable from outside the unit, testable manually) rather
+# than inlined here. The script reads IMAGE_VERSION from this initrd's
+# /usr/lib/os-release (the version of THIS initrd, baked at build time
+# by mkosi.images/initrd/mkosi.postinst), not the sysroot rootfs's.
+#
+# A static service, NOT a systemd generator: the work it does is normal
+# runtime filesystem mutation (creating/snapshotting subvols), which
+# generators aren't allowed to do — systemd.generator(7) limits
+# generators to emitting unit files.
+
+[Unit]
+Description=Snapshot or create theatre-os @persist/<IMAGE_VERSION>
+DefaultDependencies=no
+Requires=sysroot-system-data.mount
+After=sysroot-system-data.mount
+Before=sysroot-system-persist.mount
+# initrd-fs.target is the marker for "all the file systems the initrd
+# needs are ready." Don't block it here — that's
+# sysroot-system-persist.mount's job; we just need to be Before it.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/theatre-os/snapshot.sh
+# StandardOutput/Error to the initrd's journal, which survives
+# switch-root via journald's per-boot ring buffer.
+StandardOutput=journal
+StandardError=journal

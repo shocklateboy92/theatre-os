@@ -30,13 +30,12 @@ iteration loop. Operational specifics live elsewhere:
   HTTPS. LAN-only DNS, real Let's Encrypt cert. No GPG signing —
   HTTPS + SHA256 covers the realistic threat in a single-tenant
   trust boundary.
-- **Deploy**: [`systemd-sysupdate`](https://www.freedesktop.org/software/systemd/man/latest/systemd-sysupdate.html)
-  on the HTPC, driven by the `theatre-os update` wrapper. The `.tar`
-  extracts into a fresh btrfs subvol on the data partition
-  (`Type=subvolume`); the `.efi` UKI lands in `/efi/EFI/Linux/`
-  (`Type=regular-file`). systemd-boot enumerates UKIs → the boot
-  menu shows every installed version. Rollback = pick an older
-  entry.
+- **Deploy**: [`systemd-sysupdate`](https://www.freedesktop.org/software/systemd/man/latest/systemd-sysupdate.html),
+  driven via `updatectl` — no wrapper. Each version is a fresh RO
+  `@os/<v>` subvol + matching UKI; systemd-boot enumerates UKIs, so
+  rollback is picking an older menu entry. The per-version
+  `@persist/<v>` is forked at the *next boot* by the initrd, not at
+  update time (see Boot sequence).
 - **Runtime**: `@os/<v>` btrfs subvolume mounted RO at `/`, no
   overlayfs. Writes to `/usr` and most of `/etc` fail loudly. `/var`,
   `/home/kodi`, and a few identity files bind-mount from a
@@ -61,22 +60,40 @@ Reference implementations we lean on:
    subvols.
 3. Reboot → all experimental writes vanish.
 4. Promote working changes into the mkosi config in this repo.
-5. `./build.sh` → `./publish.sh` → `theatre-os update` on the box,
-   reboot.
+5. `./build.sh` → `./publish.sh` → `updatectl update host` on the
+   box, reboot.
 6. Verify; if broken, reboot and pick the previous UKI from the
    systemd-boot menu. AMT KVM is the escape hatch if unbootable.
 
 The forced-forgetting on reboot is the point: the only way to keep a
 fix is to commit it to the repo.
 
+## Updating
+
+`updatectl update host` (add `--reboot` to reboot after), then you're
+on the new version. `updatectl list host` shows versions; roll back by
+picking an older UKI in the systemd-boot menu. No wrapper, no auto-
+updates. Signatures aren't checked (`Verify=no` in the transfer files
+— LAN trust boundary; the SHA256 manifest is still enforced).
+
+Two persist chores that sysupdate can't do itself (it doesn't know
+about `@persist`) run at boot instead:
+
+- **Per-version persist fork** — the initrd forks `@persist/<v>` for a
+  newly-installed version from the previous boot's persist. See Boot
+  sequence.
+- **Orphan persist GC** — `theatre-os-persist-gc.service` reaps any
+  `@persist/<v>` whose `@os/<v>` sysupdate has swept. Bare versions
+  only; never snapshots / restore backups / experiment scratch.
+
 ## The `theatre-os` CLI
 
-Single entry point for all OS-state operations. Sources under
-`mkosi.extra/usr/lib/theatre-os/cmd-*.sh`.
+Single entry point for the OS-state operations that go beyond plain
+systemd tooling: persist snapshots/restore and experiment mode.
+Sources under `mkosi.extra/usr/lib/theatre-os/cmd-*.sh`.
 
 | Command | What it does |
 |---|---|
-| `theatre-os update` | Pull next release via sysupdate, snapshot persist, paired GC. Refuses in experiment mode. |
 | `theatre-os experiment` | Enter experiment mode live: swap-snapshot `@os/<v>` and `@persist/<v>`, flip `/` to RW. Reboot to leave. |
 | `theatre-os snapshot [name]` | Snapshot `@persist/<v>` to a checkpoint before risky persist mutations. |
 | `theatre-os snapshot list` | Show manual snapshots. |
@@ -92,16 +109,6 @@ needed), and the kernel still serves the running system from the
 renamed copy. Next boot mounts the fresh subvol. Verified across
 `mount -o remount,rw /` on the RW-flipped current subvol;
 end-to-end test in `tests/cases/03-experiment.sh`.
-
-`update` is a small wrapper around `systemd-sysupdate`: pins the
-target version via `sysupdate check-new --json`, runs the install,
-snapshots `@persist/<r>` → `@persist/<n>` so the new version forks
-from the running persist, GCs orphan persist subvols whose `@os`
-sibling no longer exists. Sysupdate's D-Bus daemon + periodic timer
-+ reboot timer are all masked at build time so the wrapper is the
-only entry point (otherwise anything calling the
-`org.freedesktop.sysupdate1` interface would bypass the experiment
-guard and persist snapshot).
 
 ## Layout
 
@@ -121,8 +128,18 @@ The btrfs partition holds both OS and persist subvolumes:
 ├── @os/2026-05-10-0901                    RO, written by sysupdate
 ├── @persist/2026-05-09-1422
 ├── @persist/2026-05-09-1530
-└── @persist/2026-05-10-0901               RW, one per OS version, CoW-shared
+├── @persist/2026-05-10-0901               RW, one per OS version, CoW-shared
+└── last-booted-version                    plain file: last version booted
 ```
+
+(`@persist/` may also hold sibling subvols from the CLI:
+`<v>-snap-<ts>` checkpoints, `<v>-pre-restore-<ts>` backups,
+`<v>-experiment-<u>` scratch. Those have their own lifecycles and are
+never touched by the orphan GC.)
+
+`last-booted-version` sits at the btrfs root (not inside any subvol)
+so it survives per-version swaps; the initrd reads it to fork a new
+version's persist and rewrites it each boot (see Boot sequence).
 
 One partition (vs two) so free space flows between OS and persist.
 Per-version persist isolation means rollback also rolls back persist
@@ -155,9 +172,11 @@ spec-blessed `BUILD_ID=` field.
 
 - `/var/` — bind-mounted entire from `@persist/<v>/var`. Default
   Linux semantics; services find their state where they expect it.
-  Per-version persist is seeded from the rootfs's `/var` tree at
-  install time so packages don't silently re-initialise on first
-  boot.
+  The install version's persist is seeded from the rootfs's `/var`
+  tree at install time so packages don't silently re-initialise on
+  first boot; each later version forks its persist (`/var` included)
+  from the previous boot's persist, in the initrd, on its first boot
+  (see Boot sequence).
 - `/home/kodi/` — bind-mounted, full Kodi userdata + moonlight
   config. Owned by `kodi:kodi` (UID/GID 420, pinned in `sysusers.d/`
   for stability across rebuilds).
@@ -321,27 +340,41 @@ View: `journalctl -u theatre-os-avr-logger -f`. Correlate:
 ## Boot sequence
 
 UEFI → systemd-boot → selected UKI bundles kernel + initrd → the
-initrd's systemd PID 1 mounts `@os/<v>` RO at `/sysroot`,
-`@persist/<v>` at `/sysroot/system/persist`, binds `/sysroot/var`,
-`/sysroot/home/kodi`, and `/sysroot/etc/machine-id` from persist
-(all before switch-root, because PID 1 in the rootfs reads
-machine-id very early and a rootfs-side bind would attach too late),
-then switch-roots. The rootfs's PID 1 inherits those mounts and
-brings up the explicit `efi.mount` that `systemd-gpt-auto-generator`
-is disabled from auto-mounting (the generator hangs
-`initrd-root-fs.target` waiting for a discoverable root partition
-we don't have; cmdline has `rd.systemd.gpt_auto=0`).
-`kodi-gbm.service` lands the user at Kodi on tty1 via
-`Alias=display-manager.service` pulled by `graphical.target`.
+initrd's systemd PID 1 mounts `@os/<v>` RO at `/sysroot`, mounts the
+btrfs root (subvolid=5) at `/sysroot/system/data` so it can see the
+`@persist/` container + `last-booted-version`, runs the
+persist-snapshot step (below) to ensure `@persist/<v>` exists, mounts
+that `@persist/<v>` at `/sysroot/system/persist`, binds `/sysroot/var`,
+`/sysroot/home/kodi`, and `/sysroot/etc/machine-id` from persist (all
+before switch-root, because PID 1 in the rootfs reads machine-id very
+early and a rootfs-side bind would attach too late), then
+switch-roots. The rootfs's PID 1 inherits those mounts and brings up
+the explicit `efi.mount` that `systemd-gpt-auto-generator` is disabled
+from auto-mounting (the generator hangs `initrd-root-fs.target`
+waiting for a discoverable root partition we don't have; cmdline has
+`rd.systemd.gpt_auto=0`). `kodi-gbm.service` lands the user at Kodi on
+tty1 via `Alias=display-manager.service` pulled by `graphical.target`.
 
-The custom mount units (`sysroot.mount`, `sysroot-system-*.mount`,
-`sysroot-var.mount`, `sysroot-home-kodi.mount`,
-`sysroot-etc-machine\x2did.mount`, plus the machine-id oneshot)
-live in `mkosi.images/initrd/mkosi.extra/`. Version stamping happens
-via `mkosi.images/initrd/mkosi.finalize` substituting `@VERSION@` in
-the staged units against `$IMAGE_VERSION`. Each UKI ships with its
-own version-specific mount units, so booting an older UKI from the
-systemd-boot menu mounts the matching `@os/<v>` / `@persist/<v>`.
+### Persist snapshot in the initrd
+
+Between mounting the btrfs root and mounting `@persist/<v>`,
+`theatre-os-persist-snapshot.service` runs
+`/usr/lib/theatre-os/snapshot.sh` to guarantee `@persist/<v>` exists:
+if it doesn't, fork it from `@persist/<last-booted-version>` (or, on a
+brand-new box, empty), then record the version booted. Full case
+analysis and the crash-safety argument live in `snapshot.sh`; the key
+property is that forking happens *here*, in the next boot's initrd
+after the previous boot cleanly shut down, so persist is always forked
+from a settled state — and sourcing from `last-booted-version` (not
+"newest") makes rollback-then-forward fork from the right line.
+
+The initrd's mount units, this service + `snapshot.sh`, and the
+machine-id oneshot live in `mkosi.images/initrd/mkosi.extra/`.
+`mkosi.finalize` substitutes `@VERSION@` into the `.mount` units
+(failing the build if any placeholder survives); `snapshot.sh` reads
+`IMAGE_VERSION` from os-release at runtime instead. Each UKI ships its
+own version-pinned mounts, so booting an older UKI mounts its matching
+`@os/<v>` / `@persist/<v>`.
 
 ## Build & publish
 
@@ -405,9 +438,9 @@ Boot / storage:
 - **Strict A/B partitions** — only 2 rollback slots; N subvols gives
   unlimited rollback bounded by retention.
 - **GRUB + grub-btrfs** — solves dynamic menu regen, which we don't
-  need: snapshots happen only on update and sysupdate drops the UKI
-  in the same transaction. systemd-boot's static UKI enumeration is
-  enough.
+  need: the OS subvol (`@os/<v>`) is created only on update and
+  sysupdate drops its UKI in the same transaction. systemd-boot's
+  static UKI enumeration is enough.
 - **erofs files on ext4** (KDE Linux model) — equivalent isolation
   but adds a loop-mount layer; btrfs RO snapshots give the same
   immutability natively. We also don't need delta downloads, so the

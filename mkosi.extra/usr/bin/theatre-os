@@ -1,14 +1,20 @@
 #!/bin/bash
-# theatre-os — single entry point for OS-level operations on a running box.
+# theatre-os — single entry point for OS-state operations on a running
+# box that go beyond what plain systemd tooling covers: persist
+# snapshots/restore and experiment mode.
 #
 # Adding a verb means adding a `cmd-<verb>.sh` under /usr/lib/theatre-os/
 # and an arm in the dispatcher below. Sub-verbs (e.g. `snapshot list`)
 # are dispatched inside the verb's command file, not here.
 #
-# We deliberately do NOT expose systemd-sysupdate directly: the daemon
-# and timer are masked in the image so this script is the only path
-# that runs an update, ensuring the experiment-mode guard and the
-# persist snapshot always run as part of the transaction.
+# Updating is not a verb here — use updatectl directly:
+#     updatectl list host        # available + installed versions
+#     updatectl update host      # install newest (--reboot to reboot)
+# Roll back by picking an older UKI from the systemd-boot menu. The
+# image is self-sufficient around that: each UKI's initrd pins its own
+# @os/<v> + @persist/<v> mounts, the initrd's snapshot.sh forks
+# @persist for a newly-booted version, and theatre-os-persist-gc.service
+# reaps orphan @persist late in boot.
 
 set -eu
 
@@ -21,12 +27,6 @@ usage() {
 Usage: theatre-os <command> [args...]
 
 Commands:
-  update [--reboot|--no-reboot]
-                      Pull and install the next release. Snapshots persist
-                      and offers to reboot (defaults to Yes; --reboot or
-                      --no-reboot skips the prompt).
-  list                Show available and installed versions
-                      (passthrough to systemd-sysupdate list).
   snapshot [name]     Manually snapshot persist for a checkpoint.
     snapshot list       Show snapshots.
     snapshot delete <id>  Drop one.
@@ -40,27 +40,17 @@ Commands:
                       leave. Throwaway scratch for /usr / /etc edits.
                       Defaults to prompting; --yes / --no skip the prompt.
 
-See README → Updates & experiment mode.
+To update the OS, use updatectl directly:
+  updatectl list host        # available + installed versions
+  updatectl update host      # install newest (--reboot to reboot)
+Roll back by selecting an older entry in the systemd-boot menu.
+
+See README → Updates, snapshots & experiment mode.
 EOF
     exit 2
 }
 
 case "${1:-}" in
-    update)
-        shift
-        # shellcheck source=/dev/null
-        . "$LIB/cmd-update.sh"
-        cmd_update "$@"
-        ;;
-    list)
-        shift
-        # Pure passthrough — sysupdate's own output is fine. Also serves
-        # as a quick "is the transfer config valid + can we reach dufs?"
-        # smoke test. Absolute path: systemd-sysupdate is a systemd
-        # internal helper at /usr/lib/systemd/, not on $PATH.
-        # --verify=no: see cmd-update.sh / README → Architecture.
-        exec /usr/lib/systemd/systemd-sysupdate --verify=no list "$@"
-        ;;
     snapshot)
         shift
         # shellcheck source=/dev/null

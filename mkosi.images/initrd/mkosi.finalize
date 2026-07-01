@@ -1,12 +1,28 @@
 #!/bin/sh
 # Same logic as the top-level mkosi.finalize, applied to the initrd
-# rootfs. The initrd's sysroot.mount needs the @VERSION@ -> actual
-# version substitution to mount the right @os/<v> subvolume. Both
-# images run the same script (symlink? duplicate? just two files for
-# now — small enough.).
+# rootfs. The initrd's sysroot.mount (and the other version-pinned
+# sysroot-*.mount units) need the @VERSION@ -> actual version
+# substitution to mount the right @os/<v> / @persist/<v> subvolume.
+# Both images run the same script (symlink? duplicate? just two files
+# for now — small enough.).
+#
+# IMAGE_VERSION is provided in the build environment by mkosi (and is
+# also auto-stamped into this initrd's /usr/lib/os-release, which is
+# what /usr/lib/theatre-os/snapshot.sh reads at runtime).
 
 set -eu
 
 find "$BUILDROOT/usr/lib/systemd/system" \
         -maxdepth 1 -name '*.mount' -type f -print0 \
 | xargs -0 -r sed -i "s|@VERSION@|${IMAGE_VERSION}|g"
+
+# Fail the build loudly if any @VERSION@ placeholder survived the
+# substitution above (e.g. a unit dropped into a subdirectory the
+# -maxdepth 1 find misses, or a typo'd placeholder). A residual
+# @VERSION@ in a .mount unit means the initrd would try to mount a
+# subvol literally named "@VERSION@" and drop to emergency at boot —
+# far better to catch it here.
+if grep -rl '@VERSION@' "$BUILDROOT/usr/lib/systemd/system" 2>/dev/null; then
+    echo "mkosi.finalize: residual @VERSION@ in the unit(s) above" >&2
+    exit 1
+fi

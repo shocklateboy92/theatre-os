@@ -3,8 +3,9 @@
 # checkpoints before risky persist mutations (e.g. ha-config's
 # deploy.sh pushing new Kodi addons, manual SSH edits to Kodi
 # settings, library imports). Complementary to:
-#   - The auto per-version persist snapshot taken by `theatre-os update`
-#     (one fork per OS install — coarse, doesn't help mid-version).
+#   - The auto per-version persist snapshot taken by the initrd on
+#     the first boot of a new version (one fork per OS install —
+#     coarse, doesn't help mid-version). See README → Boot sequence.
 #   - Experiment mode (throwaway scratch for /usr / /etc writes —
 #     different scope, both @os and @persist snapshotted at boot).
 #
@@ -35,7 +36,7 @@ THEATRE_SNAPSHOT_NAME_RE='[a-zA-Z0-9_-]+'
 
 # List manual-snapshot subvol names (without the @persist/ prefix).
 # Filters out the per-version base subvols (@persist/<v>) — those are
-# managed by `theatre-os update`, not by this command.
+# managed by the boot-time persist snapshot + GC, not by this command.
 list_snapshots() {
     # `--` so grep doesn't interpret the leading `-` of the pattern
     # ("-snap-...") as a command-line flag.

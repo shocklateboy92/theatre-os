@@ -81,11 +81,22 @@ updates.
 
 ### Not yet covered
 
-- `theatre-os update` — needs a second build to update *to*. The
-  manual test loop documented in commit 19bb1ca (phase 4) covers
-  this; could be added here but would double the harness's runtime
-  to ~15min per run because it requires two builds + a second
-  publish to dufs.
+- **Updating** — now plain `updatectl update host` (no
+  `theatre-os update` verb), so there's no theatre-os shell code left
+  to unit-test here; the boot-time persist fork and orphan GC are what
+  carry the OS-specific logic now (next bullet). The manual end-to-end
+  update loop documented in commit 19bb1ca (phase 4) still applies;
+  exercising it in the harness would need a second build to update
+  *to* + a second publish to dufs, ~doubling runtime to ~15min/run.
+- **Boot-time persist snapshot + orphan GC** — the initrd's
+  `snapshot.sh` (fork `@persist/<v>` from `last-booted-version` on
+  first boot of a new version) and `theatre-os-persist-gc.service`
+  (reap orphan `@persist/<v>`) only fire across an actual version
+  change, so they share the two-builds cost above. Until that's wired,
+  validate manually: `journalctl -b -u theatre-os-persist-snapshot`
+  (in the initrd journal) and `-u theatre-os-persist-gc`, plus
+  `cat /system/data/last-booted-version` and
+  `btrfs subvolume list /system/data` after an update + reboot.
 - Kodi actually rendering — needs real GPU; not testable in qemu.
 - Hardware-specific tweaks (BT/WOL/power-key) — phase 6, on T480
   via AMT KVM.
@@ -108,8 +119,9 @@ need to run multiple test VMs concurrently, change the constant.
 ## When to run
 
 - Before pushing the `phase-*` branches.
-- Before calling `./publish.sh` to drop a new release on dufs (so
-  the on-box `theatre-os update` doesn't pull a regressed CLI).
+- Before calling `./publish.sh` to drop a new release on dufs (so the
+  next on-box `updatectl update host` doesn't pull a regressed CLI
+  or a broken initrd persist-snapshot step).
 - After bumping any package likely to affect the CLI plumbing
   (systemd, btrfs-progs, kernel — i.e. most Arch updates).
 - When a `theatre-os experiment` or `theatre-os restore` invocation

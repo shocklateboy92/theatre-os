@@ -7,16 +7,13 @@
 # transaction. See README → Architecture → Distribution and
 # README → Build & publish → Pull-side.
 #
-# Verify=no skips the GPG-signature step only; SHA256SUMS is still checked
-# unconditionally per sysupdate.d(5). See README → Architecture → Distribution
-# for the no-signing rationale (single LAN trust boundary).
+# Verify=no disables GPG-signature checking (we don't sign — LAN trust
+# boundary); the payload SHA256 is still checked against the manifest.
+# Set here rather than via a CLI flag because updates run through
+# updatectl directly. Only affects url-file / url-tar sources.
 
-# Verification (signature checking) is controlled per-invocation via
-# `--verify=no` passed by the theatre-os wrapper, not in this file.
-# `Verify=` was removed/renamed in modern systemd (260+) and the
-# config-file directive is no longer recognised. SHA256 checksums in
-# SHA256SUMS are verified unconditionally regardless. See README →
-# Architecture → Distribution.
+[Transfer]
+Verify=no
 
 [Source]
 Type=url-tar

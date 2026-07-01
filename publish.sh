@@ -7,9 +7,9 @@
 # auth needed (see README → Architecture → Distribution).
 #
 # Order matters: artefacts first, then SHA256SUMS last, so consumers (i.e.
-# `theatre-os update`) never see a checksum file referencing a not-yet-
-# uploaded payload. PUT is idempotent: re-running for the same build is
-# a no-op (replaces with identical bytes).
+# `updatectl` on the box) never see a checksum file referencing a
+# not-yet-uploaded payload. PUT is idempotent: re-running for the same build
+# is a no-op (replaces with identical bytes).
 
 set -eu
 

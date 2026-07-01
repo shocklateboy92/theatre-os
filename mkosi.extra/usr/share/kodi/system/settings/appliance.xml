@@ -11,7 +11,9 @@
   This is the right layer for "OS-image-bundled defaults" — survives
   persist wipes, doesn't conflict with user changes (user can flip
   any of these in the UI and the change persists), and lives in the
-  RO @os subvol so it rolls back atomically with theatre-os update.
+  RO @os subvol so it rolls back atomically with the OS version
+  (it's part of @os/<v>; booting an older UKI brings back that
+  version's defaults too).
 
   Currently overrides:
     addons.unknownsources=true   so the bundled third-party

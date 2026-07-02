@@ -11,11 +11,17 @@ This repo builds and ships the OS image. It does NOT contain:
 
 ## Target hardware
 
-- T480 staging/prod: `ssh root@theatre-t480.home.lasath.com`
-- ZBook (eventual cutover): `ssh root@theatre.home.lasath.com`
-- Both have Intel AMT. T480 quirks: `t480-hardware-quirks.md`.
-  ZBook tweaks (legacy reference for behaviour that may need re-implementing
-  on theatre-os): `legacy-zbook-libreelec.md`.
+Two concurrent boxes, one per mkosi profile (see README → "Profiles"):
+
+- **`t480`** (main theatre, default profile): `ssh root@theatre-t480.home.lasath.com`.
+  Intel AMT (see below). Quirks: `t480-hardware-quirks.md`.
+- **`zbook`** (bedroom TV): `ssh root@bedroom-tv.home.lasath.com`.
+  Volume over HDMI-CEC (Pulse-Eight USB-CEC adapter), no AVR. Quirks:
+  `zbook-hardware-quirks.md`. Legacy behaviour reference (LibreELEC era,
+  may need re-implementing): `legacy-zbook-libreelec.md`.
+
+Build/publish a specific box: `./build.sh --profile=zbook` then
+`./publish.sh zbook` (default profile is `t480`).
 
 ## AMT (out-of-band management)
 

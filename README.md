@@ -10,6 +10,8 @@ iteration loop. Operational specifics live elsewhere:
 - `AGENTS.md` — target hosts, AMT power control, secrets locations.
 - `t480-hardware-quirks.md` — Lenovo T480 specifics (AMT
   provisioning, eDP-1 disable, HDMI 1.4 cap).
+- `zbook-hardware-quirks.md` — HP ZBook (bedroom TV) specifics and the
+  hardware still to be characterised.
 - `legacy-zbook-libreelec.md` — behaviour spec for the retired ZBook,
   kept as a reference for features that may need reimplementing
   (WOL via dock, BT wake, BLE reconnect watchdog, wake chime).
@@ -51,6 +53,57 @@ Reference implementations we lean on:
   for delta downloads via desync); we don't need deltas, so we use
   per-version subvols + per-version persist for stronger isolation
   and simpler plumbing.
+
+## Profiles (per-machine targets)
+
+One repo builds two boxes via [mkosi
+profiles](https://mkosi.systemd.io/) (`mkosi.profiles/<profile>/`):
+
+| profile | box | hostname | update path | AVR volume |
+|---------|-----|----------|-------------|------------|
+| `t480` (default) | Lenovo T480, main theatre | `theatre-t480` | `sysupdate/theatre-t480/` | HA → Denon addon |
+| `zbook` | HP ZBook, bedroom TV | `bedroom-tv` | `sysupdate/bedroom-tv/` | HDMI-CEC (Pulse-Eight) |
+
+Everything common lives in `mkosi.conf` + `mkosi.extra/`. Only the
+genuinely per-box bits are split into `mkosi.profiles/<profile>/`
+(its own `mkosi.conf` overrides + a `mkosi.extra/` overlay):
+
+- **Hostname** — baked, so per profile. The base `mkosi.conf` keeps a
+  `theatre-os` fallback only for a stray profile-less build.
+- **Update source path** — baked into the image's
+  `usr/lib/sysupdate.d/*.transfer`, so a box only ever pulls its own
+  updates. This path *must* match the dufs subdir `publish.sh` pushes
+  to, hence the per-profile copies of the transfer files.
+- **Output directory** — all profiles share one `mkosi.output/`.
+  Output is deliberately *not* split per profile: the top-level
+  `Initrds=%O/initrd` expands `%O` against the default output dir when
+  `mkosi.conf` is parsed, *before* any profile override, so a
+  per-profile `OutputDirectory=` makes the UKI embed a stale initrd
+  from `mkosi.output/` and the image fails to mount its rootfs at boot.
+  Build one target at a time and publish it before building the other
+  (each build overwrites the shared, unversioned `mkosi.output/initrd`,
+  and `publish.sh` reads the most recent `SHA256SUMS`).
+- **AVR volume** — the `t480` profile carries the HA→Denon Kodi addon +
+  keymap and the AVR event logger; the `zbook` profile ships none of
+  them and drives volume over HDMI-CEC instead (`kodi` already depends
+  on `libcec`, so the Pulse-Eight USB-CEC adapter works with no extra
+  packages).
+- **Hardware quirks** — both profiles blank the internal laptop panel
+  with `video=eDP-1:d` (Kodi is gbm-direct/single-CRTC, so a live
+  internal panel means nothing reaches the TV). The T480's 40–60%
+  battery charge-threshold udev rule is `t480`-only; the ZBook's
+  battery/ALSA/initrd equivalents are TBD (see
+  `zbook-hardware-quirks.md`).
+
+Profiles are selected with `--profile`, which `build.sh` passes
+through; a bare `./build.sh` defaults to `t480` and behaves exactly as
+it did before profiles existed. See "Build & publish".
+
+To add a **third** box: create `mkosi.profiles/<name>/mkosi.conf`
+(hostname + `OutputDirectory=%D/mkosi.output/<name>`), add its two
+`*.transfer` files under that profile's `mkosi.extra`, add the
+profile → dufs-device mapping to `publish.sh` and `vacuum.sh`, and
+write the profile's hardware-quirks doc.
 
 ## Iteration loop
 
@@ -209,12 +262,15 @@ Two complementary repos:
 
 - **theatre-os (this repo)** — anything reproducible-from-source
   that must survive a wipe-and-rebuild. The image carries
-  hardware-coupled Kodi addons + keymaps (AVR volume, lights toggle,
-  watchlist, etc.) under `mkosi.extra/usr/share/kodi/`. Kodi reads
-  these as system addons; no SQLite registration needed. The `zz_`
-  prefix on the AVR keymap forces alphabetical load order so its
-  volume-key bindings beat Kodi's built-in `keyboard.xml` /
-  `remote.xml`.
+  hardware-coupled Kodi addons + keymaps (lights toggle, watchlist,
+  etc.) under `mkosi.extra/usr/share/kodi/`. Kodi reads these as system
+  addons; no SQLite registration needed. The AVR volume addon + its
+  keymap are `t480`-only, so they live in that profile's overlay
+  (`mkosi.profiles/t480/mkosi.extra/usr/share/kodi/`) rather than the
+  shared tree; the `zz_` prefix on the AVR keymap forces alphabetical
+  load order so its volume-key bindings beat Kodi's built-in
+  `keyboard.xml` / `remote.xml`. (The ZBook uses HDMI-CEC for volume,
+  handled by Kodi's built-in libcec peripheral — no addon or keymap.)
 - **ha-config** — anything per-user / stateful / secret. HAKA + its
   HA token, SkinShortcuts menu config (user-edited via the UI),
   Kodi library + watch state + skin choice + instance UUID. Deployed
@@ -229,16 +285,23 @@ HA recreates the entity with a new ID and breaks ~5 automations.
 
 ## Hardware
 
-Built for one machine at a time. Currently a Lenovo ThinkPad T480
-(see `t480-hardware-quirks.md`: AMT provisioning + hostname-sharing
-DNS quirk, eDP-1 disable for external display, HDMI 1.4 cap forcing
-USB-C DP-alt for 4K60). If adapting to other hardware, expect to
-grow your own hardware-quirks doc: ALSA card naming, display output
-selection, kernel modules to add to the initrd, etc.
+Two boxes, one per mkosi profile (see "Profiles (per-machine
+targets)"). Per-box hardware quirks are isolated in the profile — never
+in shared config — so one box's workaround can't regress the other.
 
-Battery: pinned 40-60% via udev rule for an always-plugged-in
-machine. Rationale in
-`mkosi.extra/usr/lib/udev/rules.d/50-charge-thresholds.rules`.
+The `t480` (main theatre) is a Lenovo ThinkPad T480 — see
+`t480-hardware-quirks.md`: AMT provisioning + hostname-sharing DNS
+quirk, eDP-1 disable for external display, HDMI 1.4 cap forcing USB-C
+DP-alt for 4K60. The `zbook` (bedroom TV) is an HP ZBook whose quirks
+are still being characterised — see `zbook-hardware-quirks.md`. When
+adapting to other hardware, expect to grow that doc: ALSA card naming,
+display output selection, kernel modules to add to the initrd, etc.
+
+Battery: the `t480` profile pins charge to 40-60% via a udev rule for
+an always-plugged-in machine. Rationale in
+`mkosi.profiles/t480/mkosi.extra/usr/lib/udev/rules.d/50-charge-thresholds.rules`.
+The ZBook may need its own rule (HP EC exposes charge control
+differently, if at all).
 
 ## Kodi & moonlight
 
@@ -311,6 +374,10 @@ physical power button.
 
 ### AVR event logger
 
+**`t480` profile only** — the bedroom ZBook has no Denon AVR (volume
+runs over HDMI-CEC there), so this ships only in the `t480` image
+(`mkosi.profiles/t480/mkosi.extra/`).
+
 `theatre-os-avr-logger.service` holds a persistent TCP control
 session to the Denon AVR on port 23 and timestamps every
 state-change event the receiver pushes (input switch, surround
@@ -379,12 +446,23 @@ own version-pinned mounts, so booting an older UKI mounts its matching
 ## Build & publish
 
 ```sh
-./build.sh           # build (default verb)
-./build.sh -f vm     # rebuild and boot in qemu
-./build.sh shell     # nspawn into the rootfs without booting
-./publish.sh         # PUT .tar + .efi + SHA256SUMS to dufs
-./vacuum.sh [N]      # trim dufs to last N versions (default 20)
+# Default profile is t480 (the main theatre box):
+./build.sh                     # build t480 (default verb)
+./build.sh -f vm               # rebuild t480 and boot in qemu
+./build.sh shell               # nspawn into the rootfs without booting
+./publish.sh                   # PUT t480's .tar + .efi + SHA256SUMS to dufs
+./vacuum.sh [N]                # trim t480's dufs dir to last N (default 20)
+
+# The bedroom ZBook is the `zbook` profile:
+./build.sh --profile=zbook     # build the bedroom-tv image
+./publish.sh zbook             # PUT to dufs/bedroom-tv
+./vacuum.sh zbook [N]          # trim bedroom-tv's dufs dir
 ```
+
+All profiles share one `mkosi.output/`, and each
+`publish.sh`/`vacuum.sh` targets the matching dufs device path — so
+build+publish one target before building the other (see "Profiles
+(per-machine targets)").
 
 **Always invoke via `build.sh`, never `sudo mkosi` directly** —
 `build.sh` renders `mkosi.repart.in/*.in` templates first (mkosi

@@ -17,6 +17,38 @@ set -eu
 
 cd "$(dirname "$0")"
 
+# Determine which profile (target machine) we're building. mkosi selects
+# it with --profile; we default to t480 — the original single target — so
+# a bare `./build.sh` behaves exactly as it did before profiles existed.
+PROFILE=t480
+have_profile=0
+prev=
+for arg in "$@"; do
+    case "$arg" in
+        --profile=*) PROFILE="${arg#--profile=}"; have_profile=1 ;;
+        --profile)   have_profile=1 ;;   # value is the following arg
+    esac
+    [ "$prev" = "--profile" ] && PROFILE="$arg"
+    prev="$arg"
+done
+
+# If the caller didn't pass --profile, inject the default so mkosi always
+# builds a complete image — hostname, the sysupdate source path and every
+# per-box file now live in profiles, so a profile-less build is broken.
+if [ "$have_profile" -eq 0 ]; then
+    set -- --profile="$PROFILE" "$@"
+fi
+echo "build.sh: profile=$PROFILE"
+
+# All profiles share one output dir. Do NOT move this per-profile via
+# OutputDirectory= in a profile: the top-level `Initrds=%O/initrd` in
+# mkosi.conf expands %O against the DEFAULT output dir at parse time
+# (before a profile override applies), so a per-profile OutputDirectory
+# makes the UKI embed a stale initrd from mkosi.output/ and the image
+# fails to mount its rootfs at boot. Build one target at a time and
+# publish it before building the other.
+OUTDIR="mkosi.output"
+
 VERSION="$(./mkosi.version)"
 
 # Prune old artefacts in mkosi.output/ — each build produces ~11 GiB
@@ -28,7 +60,7 @@ VERSION="$(./mkosi.version)"
 # Date-based version stamps sort lexicographically as time order, so
 # `sort` puts oldest first; `head -n -K` drops the K newest.
 LOCAL_RETAIN=2
-existing=$(ls mkosi.output/theatre-os_*.SHA256SUMS 2>/dev/null \
+existing=$(ls "$OUTDIR"/theatre-os_*.SHA256SUMS 2>/dev/null \
     | sed 's|.*/theatre-os_\(.*\)\.SHA256SUMS|\1|' \
     | grep -v "^$VERSION$" \
     | sort -u)
@@ -38,12 +70,12 @@ existing=$(ls mkosi.output/theatre-os_*.SHA256SUMS 2>/dev/null \
 to_drop=$(printf '%s\n' "$existing" | head -n "-$((LOCAL_RETAIN - 1))" || true)
 for v in $to_drop; do
     [ -n "$v" ] || continue
-    echo "build.sh: pruning local mkosi.output/theatre-os_$v.*"
-    sudo rm -f mkosi.output/theatre-os_"$v".raw \
-                mkosi.output/theatre-os_"$v".tar \
-                mkosi.output/theatre-os_"$v".efi \
-                mkosi.output/theatre-os_"$v".SHA256SUMS \
-                mkosi.output/theatre-os_"$v"
+    echo "build.sh: pruning local $OUTDIR/theatre-os_$v.*"
+    sudo rm -f "$OUTDIR"/theatre-os_"$v".raw \
+                "$OUTDIR"/theatre-os_"$v".tar \
+                "$OUTDIR"/theatre-os_"$v".efi \
+                "$OUTDIR"/theatre-os_"$v".SHA256SUMS \
+                "$OUTDIR"/theatre-os_"$v"
 done
 
 # Discover the git SHA so it can flow through to the running OS's

@@ -1,4 +1,9 @@
-# theatre-os rootfs transfer for systemd-sysupdate.
+# theatre-os rootfs transfer for systemd-sysupdate. (t480 profile)
+#
+# Per-profile copy: the ONLY per-box difference from the zbook profile's
+# copy is the Path= segment (theatre-t480 vs bedroom-tv), which must
+# match the dufs subdir publish.sh/vacuum.sh push this profile to. Keep
+# the rest of this file in sync with the zbook copy.
 #
 # Pulls theatre-os_<v>.tar from the homelab dufs instance and extracts it
 # into a fresh RO btrfs subvolume at /system/data/@os/<v>.

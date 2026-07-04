@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+# mkosi.configure — configure script (ConfigureScripts=), auto-discovered
+# by mkosi. Runs on the host before build/vm/boot/shell (see mkosi(1)
+# SCRIPTS), receives this image's config as JSON on stdin, and must echo
+# the (possibly modified) config back on stdout.
+#
+# We use it purely as an assertion: FAIL the run if no --profile was
+# given. A profile-less build is broken — hostname, the sysupdate source
+# path and every per-box file live under mkosi.profiles/{t480,zbook}/, so
+# without one you'd get an image with no identity. build.sh used to paper
+# over this by injecting a default profile; failing loudly is safer than
+# silently picking one (you always know which box you built).
+#
+# We do NOT mutate the config: read stdin, check Profiles, write the
+# original bytes back verbatim.
+
+import json
+import sys
+
+raw = sys.stdin.read()
+config = json.loads(raw)
+
+if not config.get("Profiles"):
+    sys.stderr.write(
+        "mkosi.configure: no profile selected — pass --profile=t480 "
+        "(main theatre) or --profile=zbook (bedroom TV).\n"
+    )
+    sys.exit(1)
+
+# Pass the config through unchanged.
+sys.stdout.write(raw)

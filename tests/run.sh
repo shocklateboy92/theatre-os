@@ -29,13 +29,15 @@ cd "$(dirname "$0")/.."   # repo root
 CURRENT_VERSION=$(./mkosi.version)
 if [ ! -f "mkosi.output/theatre-os_${CURRENT_VERSION}.raw" ]; then
     log "no .raw for version $CURRENT_VERSION, building"
-    ./build.sh
-    # mkosi.version is time-based and is re-evaluated by build.sh, so
-    # the version we just built may differ from CURRENT_VERSION above.
-    # Re-derive from the newest SHA256SUMS on disk.
+    sudo mkosi --profile="$PROFILE" build
+    # mkosi.version is time-based (and SHA/-dirty tagged), so the version
+    # we just built usually differs from CURRENT_VERSION computed above.
+    # Re-derive from the newest SHA256SUMS on disk — strip the
+    # theatre-os_ prefix and .SHA256SUMS suffix to get the full version
+    # string (which now includes the git SHA).
     CURRENT_VERSION=$(ls -t mkosi.output/theatre-os_*.SHA256SUMS \
         | head -1 \
-        | grep -oE '2026-[0-9-]+')
+        | sed 's|.*/theatre-os_\(.*\)\.SHA256SUMS|\1|')
     log "built version: $CURRENT_VERSION"
 else
     log "using existing build: $CURRENT_VERSION"

@@ -20,8 +20,9 @@ Two concurrent boxes, one per mkosi profile (see README → "Profiles"):
   `zbook-hardware-quirks.md`. Legacy behaviour reference (LibreELEC era,
   may need re-implementing): `legacy-zbook-libreelec.md`.
 
-Build/publish a specific box: `./build.sh --profile=zbook` then
-`./publish.sh zbook` (default profile is `t480`).
+Build/publish a specific box: `sudo mkosi --profile=zbook build` then
+`./publish.sh zbook`. `--profile` is mandatory (`t480` = main theatre,
+`zbook` = bedroom TV); there is no default.
 
 ## AMT (out-of-band management)
 

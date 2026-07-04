@@ -1,5 +1,41 @@
 #!/bin/sh
-# Image version = build datetime, UTC, minute resolution. Sorts
-# lexicographically (sysupdate's @v matching is string-based), so
-# newest builds always win. See README → Versioning.
-exec date -u +%Y-%m-%d-%H%M
+# Image version, printed to stdout for mkosi to read as ImageVersion=.
+# mkosi runs this on the host during config parsing and flows the
+# result into artefact filenames AND /usr/lib/os-release IMAGE_VERSION
+# (rootfs + initrd). It's also the per-version subvolume name:
+# @os/<v>, @persist/<v>.
+#
+# Format: <UTC build datetime, minute resolution>-<short git SHA>[-dirty]
+#   e.g.  2026-07-04-0154-6ec7dd5
+#         2026-07-04-0154-6ec7dd5-dirty
+#
+# The leading timestamp is what sysupdate's version comparison sorts
+# on (lexicographic == time order), so newest builds always win. The
+# trailing short SHA records provenance directly in the version — it
+# replaces the old separate BUILD_ID= field and the build.sh env-var
+# dance, so a running box's IMAGE_VERSION maps straight back to source.
+# -dirty marks a build off an uncommitted worktree (so a dev build
+# isn't mistaken for the clean commit it derives from).
+#
+# Build-time (not commit-time) timestamp: every build gets a fresh
+# version, so iterating on a dirty tree still yields distinguishable
+# images. Cost: each new version forks @persist/<v> at boot; the
+# persist GC reaps stale ones beyond retention.
+#
+# Falls back to a sha-less stamp outside a git checkout (e.g. CI from
+# a tarball) rather than failing.
+
+set -eu
+
+ts=$(date -u +%Y-%m-%d-%H%M)
+
+if git rev-parse --verify HEAD >/dev/null 2>&1; then
+    sha=$(git rev-parse --short HEAD)
+    suffix=""
+    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+        suffix="-dirty"
+    fi
+    printf '%s-%s%s\n' "$ts" "$sha" "$suffix"
+else
+    printf '%s-nogit\n' "$ts"
+fi

@@ -28,7 +28,7 @@ esac
 
 PUSH="https://push.apps.lasath.com/$DEVICE"
 PULL="https://static.apps.lasath.com/sysupdate/$DEVICE"
-# Single shared output dir (see build.sh's note on why output is NOT
+# Single shared output dir (see README → Profiles for why output is NOT
 # split per profile). Build+publish one target at a time: this reads
 # the most recent SHA256SUMS, which belongs to whatever you built last.
 OUTDIR="$(dirname "$0")/mkosi.output"

@@ -2,8 +2,9 @@
 #
 # mkosi appends IMAGE_ID= and IMAGE_VERSION= to this file during the
 # build (from ImageId= / mkosi.version), and mkosi.finalize then
-# sources the result and appends BUILD_ID= (the git SHA) and a
-# computed PRETTY_NAME= that interpolates IMAGE_VERSION + BUILD_ID.
+# sources the result and appends a computed PRETTY_NAME= from
+# IMAGE_VERSION. IMAGE_VERSION carries the git SHA (see mkosi.version),
+# so it doubles as the build provenance — there's no separate BUILD_ID=.
 #
 # Field semantics per os-release(5)
 # (https://www.freedesktop.org/software/systemd/man/os-release.html):

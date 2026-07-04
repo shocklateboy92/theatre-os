@@ -96,9 +96,10 @@ genuinely per-box bits are split into `mkosi.profiles/<profile>/`
   ZBook's battery/ALSA/initrd equivalents are TBD (see
   `zbook-hardware-quirks.md`).
 
-Profiles are selected with `--profile`, which `build.sh` passes
-through; a bare `./build.sh` defaults to `t480` and behaves exactly as
-it did before profiles existed. See "Build & publish".
+Profiles are selected with `--profile`. There is no default: a
+profile-less build is rejected by `mkosi.configure` (hostname and every
+per-box file live under a profile), so you always pass `--profile=t480`
+or `--profile=zbook`. See "Build & publish".
 
 ## Iteration loop
 
@@ -108,8 +109,8 @@ it did before profiles existed. See "Build & publish".
    subvols.
 3. Reboot → all experimental writes vanish.
 4. Promote working changes into the mkosi config in this repo.
-5. `./build.sh` → `./publish.sh` → `updatectl update host` on the
-   box, reboot.
+5. `sudo mkosi --profile=t480 build` → `./publish.sh` →
+   `updatectl update host` on the box, reboot.
 6. Verify; if broken, reboot and pick the previous UKI from the
    systemd-boot menu. AMT KVM is the escape hatch if unbootable.
 
@@ -208,13 +209,17 @@ The data partition has a pinned PARTUUID
 `/usr/lib/os-release`. Same image works on any host whose data
 partition uses the pinned PARTUUID; install re-asserts it.
 
-Version stamp = build datetime, UTC, minute resolution
-(`2026-05-09-1422`). Sorts correctly as a plain string (sysupdate's
-`@v` matching is lexicographic). The executable `mkosi.version` in
-the repo prints `date -u +%Y-%m-%d-%H%M`; mkosi reads its stdout and
-flows it into artefact filenames + `/usr/lib/os-release`'s
-`IMAGE_VERSION`. Git SHA is recorded separately as the
-spec-blessed `BUILD_ID=` field.
+Version stamp = build datetime (UTC, minute resolution) plus the short
+git SHA, e.g. `2026-05-09-1422-6ec7dd5` (with a `-dirty` suffix when the
+worktree has uncommitted changes). The leading timestamp is what sorts
+(sysupdate's `@v` matching is lexicographic, and the timestamp comes
+first); the trailing SHA records provenance directly in the version, so
+a running box's `IMAGE_VERSION` maps straight back to source. The
+executable `mkosi.version` in the repo computes it; mkosi reads its
+stdout and flows it into artefact filenames + `/usr/lib/os-release`'s
+`IMAGE_VERSION` (which is also the `@os/<v>` / `@persist/<v>` subvolume
+name). There is no separate `BUILD_ID=` — the SHA in `IMAGE_VERSION`
+serves that role.
 
 ### What's persistent
 
@@ -444,30 +449,44 @@ version-pinned mounts, so booting an older UKI mounts its matching
 ## Build & publish
 
 ```sh
-# Default profile is t480 (the main theatre box):
-./build.sh                     # build t480 (default verb)
-./build.sh -f vm               # rebuild t480 and boot in qemu
-./build.sh shell               # nspawn into the rootfs without booting
-./publish.sh                   # PUT t480's .tar + .efi + SHA256SUMS to dufs
-./vacuum.sh [N]                # trim t480's dufs dir to last N (default 20)
+# The main theatre box is the t480 profile:
+sudo mkosi --profile=t480 build      # build t480
+sudo mkosi --profile=t480 -f vm      # rebuild t480 and boot in qemu
+sudo mkosi --profile=t480 shell      # nspawn into the rootfs without booting
+./publish.sh                         # PUT t480's .tar + .efi + SHA256SUMS to dufs
+./vacuum.sh [N]                      # trim t480's dufs dir to last N (default 20)
 
-# The bedroom ZBook is the `zbook` profile:
-./build.sh --profile=zbook     # build the bedroom-tv image
-./publish.sh zbook             # PUT to dufs/bedroom-tv
-./vacuum.sh zbook [N]          # trim bedroom-tv's dufs dir
+# The bedroom ZBook is the zbook profile:
+sudo mkosi --profile=zbook build     # build the bedroom-tv image
+./publish.sh zbook                   # PUT to dufs/bedroom-tv
+./vacuum.sh zbook [N]                # trim bedroom-tv's dufs dir
+
+./prune.sh [N]                       # trim local mkosi.output/ to newest N (default 2)
 ```
+
+There is no default profile — `mkosi.configure` fails any build/vm
+without `--profile` (a profile-less image has no hostname or per-box
+files). `sudo` is needed because a `Format=disk` build drives
+systemd-repart.
 
 All profiles share one `mkosi.output/`, and each
 `publish.sh`/`vacuum.sh` targets the matching dufs device path — so
 build+publish one target before building the other (see "Profiles
 (per-machine targets)").
 
-**Always invoke via `build.sh`, never `sudo mkosi` directly** —
-`build.sh` discovers the git SHA (→ `BUILD_ID` in os-release) and
-fetches the pinned HAKA addon before invoking mkosi; a bare `mkosi`
-skips both. (The repart configs no longer need preprocessing —
-per-version subvolume paths use systemd-repart's `%A` specifier
-natively, see `mkosi.repart/10-data.conf`.)
+mkosi runs these auto-discovered hooks so a bare `mkosi` build is
+complete (no wrapper script needed):
+
+- `mkosi.version` — computes the version stamp (datetime + git SHA).
+- `mkosi.configure` — rejects a profile-less build.
+- `mkosi.sync` — fetches the pinned HAKA Kodi addon into `mkosi.extra/`
+  (network-enabled, runs before the build).
+- `mkosi.finalize` — creates the data/persist mountpoint stubs and
+  stamps `PRETTY_NAME` into os-release.
+
+Local artefacts accumulate (~11 GiB/build, date-stamped names); run
+`./prune.sh` when disk gets tight (it's kept out of the build path so a
+build never deletes a previous artefact).
 
 mkosi does almost everything else: `Format=disk` + `SplitArtifacts=
 uki,tar` + `Checksum=yes` produces the `.raw`, `.tar`, `.efi`, and

@@ -1,0 +1,39 @@
+#!/bin/sh
+# mkosi.sync — sync script (SyncScripts=), auto-discovered by mkosi and
+# run on the host before the image is built, WITH network access. Its
+# documented purpose is exactly this: update external sources (e.g. `git
+# pull`) before a build. See mkosi(1) SCRIPTS.
+#
+# Fetch HAKA (our fork of the script.program.homeassistant Kodi addon)
+# into the rootfs overlay tree. Pinned to a commit SHA so a build is
+# reproducible to the exact bytes we shipped; bump HAKA_SHA when
+# promoting a new upstream commit.
+#
+# The destination lives under mkosi.extra/ (gitignored — the source of
+# truth is the URL + SHA below, not a checked-in snapshot), so mkosi's
+# normal CopyFiles of mkosi.extra/ lands it in the image. The .git dir
+# is dropped after checkout (not needed at runtime, bloats the image);
+# a .haka-sha stamp is left behind so we skip re-cloning when the pin
+# hasn't changed.
+
+set -eu
+
+# Scripts run with cwd == $SRCDIR (the repo), but anchor explicitly so
+# the relative HAKA_DEST always resolves to the source tree. Sync
+# scripts are exempt from BuildSourcesEphemeral=, so writes here persist
+# into the real mkosi.extra/ (that's the whole point of a sync script).
+cd "${SRCDIR:-.}"
+
+HAKA_REPO=https://github.com/shocklateboy92/HAKA.git
+HAKA_SHA=a26733d77f7645295fbf48b0de460947904929cc  # work/fernando/mdi-icons tip
+HAKA_DEST=mkosi.extra/usr/share/kodi/addons/script.program.homeassistant
+
+if [ "$(cat "$HAKA_DEST/.haka-sha" 2>/dev/null)" != "$HAKA_SHA" ]; then
+    echo "mkosi.sync: fetching HAKA at $HAKA_SHA"
+    rm -rf "$HAKA_DEST"
+    mkdir -p "$(dirname "$HAKA_DEST")"
+    git clone --quiet "$HAKA_REPO" "$HAKA_DEST"
+    git -C "$HAKA_DEST" checkout --quiet "$HAKA_SHA"
+    rm -rf "$HAKA_DEST/.git"
+    echo "$HAKA_SHA" > "$HAKA_DEST/.haka-sha"
+fi

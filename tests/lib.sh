@@ -28,6 +28,12 @@ VM_BOOT_TIMEOUT=60
 # hanging waiting for password prompts if key auth fails.
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=5 -o LogLevel=ERROR"
 
+# Which profile (target box) the harness builds/boots. mkosi.configure
+# fails any build/vm without a profile, so every mkosi invocation here
+# passes one. Defaults to t480 (the main theatre box); override with
+# PROFILE=zbook ./tests/run.sh.
+PROFILE="${PROFILE:-t480}"
+
 # --- VM lifecycle ---------------------------------------------------
 
 # Start the VM in the background. Captures the qemu PID via mkosi's
@@ -38,7 +44,7 @@ vm_start() {
     log "starting VM (image-version=$version, cid=$VM_CID)"
     # Background mkosi vm; redirect its stdout/stderr to a logfile so
     # we don't pollute test output but can grep it on failure.
-    sudo mkosi --image-version "$version" --vsock-cid "$VM_CID" vm \
+    sudo mkosi --profile="$PROFILE" --image-version "$version" --vsock-cid "$VM_CID" vm \
         > "$VM_LOG" 2>&1 &
     VM_PID=$!
     log "VM started, pid=$VM_PID, log=$VM_LOG"

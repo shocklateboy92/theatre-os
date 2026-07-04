@@ -4,11 +4,22 @@
 # systemd-boot enumerates EFI/Linux/*.efi automatically, so the new entry
 # appears in the boot menu on next boot.
 #
+# Shared across profiles: the per-box dufs subdir is the hostname, so the
+# Source Path uses the %H specifier (see 10-rootfs.transfer).
+#
 # Paired with 10-rootfs.transfer: same @v.
+#
+# Verify=no for the same reason as 10-rootfs.transfer (no GPG signing;
+# SHA256 still enforced). Must be set on this transfer too — Verify=
+# applies per-transfer, and this one's url-file source fetches its own
+# SHA256SUMS manifest.
+
+[Transfer]
+Verify=no
 
 [Source]
 Type=url-file
-Path=https://static.apps.lasath.com/sysupdate/theatre-t480/
+Path=https://static.apps.lasath.com/sysupdate/%H/
 MatchPattern=theatre-os_@v.efi
 
 [Target]

@@ -6,15 +6,31 @@
 # dufs's push endpoint is open for PUT inside the LAN trust boundary; no
 # auth needed (see README → Architecture → Distribution).
 #
+# Usage: ./publish.sh [profile]   (profile: t480 (default) | zbook)
+# The profile selects BOTH the local output subdir to read from and the
+# dufs device path to push to; the latter MUST match the Path= baked into
+# that profile's sysupdate .transfer files, or the box won't find its
+# updates.
+#
 # Order matters: artefacts first, then SHA256SUMS last, so consumers (i.e.
-# `theatre-os update`) never see a checksum file referencing a not-yet-
-# uploaded payload. PUT is idempotent: re-running for the same build is
-# a no-op (replaces with identical bytes).
+# `updatectl` on the box) never see a checksum file referencing a
+# not-yet-uploaded payload. PUT is idempotent: re-running for the same build
+# is a no-op (replaces with identical bytes).
 
 set -eu
 
-PUSH="https://push.apps.lasath.com/theatre-t480"
-PULL="https://static.apps.lasath.com/sysupdate/theatre-t480"
+PROFILE="${1:-t480}"
+case "$PROFILE" in
+    t480)  DEVICE=theatre-t480 ;;
+    zbook) DEVICE=bedroom-tv ;;
+    *) echo "publish.sh: unknown profile '$PROFILE' (expected t480|zbook)" >&2; exit 2 ;;
+esac
+
+PUSH="https://push.apps.lasath.com/$DEVICE"
+PULL="https://static.apps.lasath.com/sysupdate/$DEVICE"
+# Single shared output dir (see build.sh's note on why output is NOT
+# split per profile). Build+publish one target at a time: this reads
+# the most recent SHA256SUMS, which belongs to whatever you built last.
 OUTDIR="$(dirname "$0")/mkosi.output"
 
 # Discover the version from the local SHA256SUMS file. mkosi just wrote

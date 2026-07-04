@@ -1,0 +1,42 @@
+# theatre-os: reap orphan @persist/<v> subvolumes whose @os/<v> is gone.
+#
+# Runs once, late in every boot, deliberately OFF the critical path:
+# nothing Wants/Requires it, and it's ordered After=kodi-gbm.service so
+# it never competes with the user-facing bring-up. sysupdate's
+# InstancesMax sweep deletes old @os/<v> but leaves the paired
+# @persist/<v> behind (it doesn't know about persist); this service
+# cleans those up. See /usr/lib/theatre-os/persist-gc.sh for the
+# bare-version-only matching that protects manual snapshots, restore
+# backups, and experiment scratch from being swept.
+#
+# Doing it at boot (rather than right after the update) makes it
+# independent of how the update was triggered — updatectl or the timer.
+
+[Unit]
+Description=theatre-os orphan @persist garbage collection
+# Needs the btrfs root mounted so it can enumerate and delete subvols.
+# After switch-root this is always up; assert it anyway.
+RequiresMountsFor=/system/data
+# Keep off the critical path: order after Kodi has been launched so we
+# don't slow the path to picture. Best-effort ordering only — we don't
+# pull kodi-gbm in, and nothing pulls us in except multi-user.target.
+After=kodi-gbm.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/theatre-os/persist-gc.sh
+# Needs root + access to /system/data to run `btrfs subvolume delete`,
+# so we can't ProtectSystem=strict it. Apply the hardening that doesn't
+# conflict with mutating subvols under /system/data.
+ProtectHome=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -10,6 +10,8 @@ iteration loop. Operational specifics live elsewhere:
 - `AGENTS.md` — target hosts, AMT power control, secrets locations.
 - `t480-hardware-quirks.md` — Lenovo T480 specifics (AMT
   provisioning, eDP-1 disable, HDMI 1.4 cap).
+- `zbook-hardware-quirks.md` — HP ZBook (bedroom TV) specifics and the
+  hardware still to be characterised.
 - `legacy-zbook-libreelec.md` — behaviour spec for the retired ZBook,
   kept as a reference for features that may need reimplementing
   (WOL via dock, BT wake, BLE reconnect watchdog, wake chime).
@@ -30,13 +32,12 @@ iteration loop. Operational specifics live elsewhere:
   HTTPS. LAN-only DNS, real Let's Encrypt cert. No GPG signing —
   HTTPS + SHA256 covers the realistic threat in a single-tenant
   trust boundary.
-- **Deploy**: [`systemd-sysupdate`](https://www.freedesktop.org/software/systemd/man/latest/systemd-sysupdate.html)
-  on the HTPC, driven by the `theatre-os update` wrapper. The `.tar`
-  extracts into a fresh btrfs subvol on the data partition
-  (`Type=subvolume`); the `.efi` UKI lands in `/efi/EFI/Linux/`
-  (`Type=regular-file`). systemd-boot enumerates UKIs → the boot
-  menu shows every installed version. Rollback = pick an older
-  entry.
+- **Deploy**: [`systemd-sysupdate`](https://www.freedesktop.org/software/systemd/man/latest/systemd-sysupdate.html),
+  driven via `updatectl` — no wrapper. Each version is a fresh RO
+  `@os/<v>` subvol + matching UKI; systemd-boot enumerates UKIs, so
+  rollback is picking an older menu entry. The per-version
+  `@persist/<v>` is forked at the *next boot* by the initrd, not at
+  update time (see Boot sequence).
 - **Runtime**: `@os/<v>` btrfs subvolume mounted RO at `/`, no
   overlayfs. Writes to `/usr` and most of `/etc` fail loudly. `/var`,
   `/home/kodi`, and a few identity files bind-mount from a
@@ -53,6 +54,52 @@ Reference implementations we lean on:
   per-version subvols + per-version persist for stronger isolation
   and simpler plumbing.
 
+## Profiles (per-machine targets)
+
+One repo builds two boxes via [mkosi
+profiles](https://mkosi.systemd.io/) (`mkosi.profiles/<profile>/`):
+
+| profile | box | hostname | update path | AVR volume |
+|---------|-----|----------|-------------|------------|
+| `t480` (default) | Lenovo T480, main theatre | `theatre-t480` | `sysupdate/theatre-t480/` | HA → Denon addon |
+| `zbook` | HP ZBook, bedroom TV | `bedroom-tv` | `sysupdate/bedroom-tv/` | HDMI-CEC (Pulse-Eight) |
+
+Everything common lives in `mkosi.conf` + `mkosi.extra/`. Only the
+genuinely per-box bits are split into `mkosi.profiles/<profile>/`
+(its own `mkosi.conf` overrides + a `mkosi.extra/` overlay):
+
+- **Hostname** — baked, so per profile. The base `mkosi.conf` keeps a
+  `theatre-os` fallback only for a stray profile-less build.
+- **Update source path** — the shared `usr/lib/sysupdate.d/*.transfer`
+  pull from `.../sysupdate/%H/`, where systemd-sysupdate expands `%H` to
+  the box's hostname — so each box only pulls its own updates, and the
+  path automatically matches the dufs subdir `publish.sh` pushes to. No
+  per-profile transfer files needed.
+- **Output directory** — all profiles share one `mkosi.output/`.
+  Output is deliberately *not* split per profile: the top-level
+  `Initrds=%O/initrd` expands `%O` against the default output dir when
+  `mkosi.conf` is parsed, *before* any profile override, so a
+  per-profile `OutputDirectory=` makes the UKI embed a stale initrd
+  from `mkosi.output/` and the image fails to mount its rootfs at boot.
+  Build one target at a time and publish it before building the other
+  (each build overwrites the shared, unversioned `mkosi.output/initrd`,
+  and `publish.sh` reads the most recent `SHA256SUMS`).
+- **AVR volume** — the `t480` profile carries the HA→Denon Kodi addon +
+  keymap and the AVR event logger; the `zbook` profile ships none of
+  them and drives volume over HDMI-CEC instead (`kodi` already depends
+  on `libcec`, so the Pulse-Eight USB-CEC adapter works with no extra
+  packages).
+- **Hardware quirks** — the base cmdline blanks the internal laptop
+  panel with `video=eDP-1:d` (Kodi is gbm-direct/single-CRTC, so a live
+  internal panel means nothing reaches the TV) — both boxes need it. The
+  T480's 40–60% battery charge-threshold udev rule is `t480`-only; the
+  ZBook's battery/ALSA/initrd equivalents are TBD (see
+  `zbook-hardware-quirks.md`).
+
+Profiles are selected with `--profile`, which `build.sh` passes
+through; a bare `./build.sh` defaults to `t480` and behaves exactly as
+it did before profiles existed. See "Build & publish".
+
 ## Iteration loop
 
 1. SSH into the box. `/` is RO; `pacman -S` and `/etc` edits fail.
@@ -61,22 +108,40 @@ Reference implementations we lean on:
    subvols.
 3. Reboot → all experimental writes vanish.
 4. Promote working changes into the mkosi config in this repo.
-5. `./build.sh` → `./publish.sh` → `theatre-os update` on the box,
-   reboot.
+5. `./build.sh` → `./publish.sh` → `updatectl update host` on the
+   box, reboot.
 6. Verify; if broken, reboot and pick the previous UKI from the
    systemd-boot menu. AMT KVM is the escape hatch if unbootable.
 
 The forced-forgetting on reboot is the point: the only way to keep a
 fix is to commit it to the repo.
 
+## Updating
+
+`updatectl update host` (add `--reboot` to reboot after), then you're
+on the new version. `updatectl list host` shows versions; roll back by
+picking an older UKI in the systemd-boot menu. No wrapper, no auto-
+updates. Signatures aren't checked (`Verify=no` in the transfer files
+— LAN trust boundary; the SHA256 manifest is still enforced).
+
+Two persist chores that sysupdate can't do itself (it doesn't know
+about `@persist`) run at boot instead:
+
+- **Per-version persist fork** — the initrd forks `@persist/<v>` for a
+  newly-installed version from the previous boot's persist. See Boot
+  sequence.
+- **Orphan persist GC** — `theatre-os-persist-gc.service` reaps any
+  `@persist/<v>` whose `@os/<v>` sysupdate has swept. Bare versions
+  only; never snapshots / restore backups / experiment scratch.
+
 ## The `theatre-os` CLI
 
-Single entry point for all OS-state operations. Sources under
-`mkosi.extra/usr/lib/theatre-os/cmd-*.sh`.
+Single entry point for the OS-state operations that go beyond plain
+systemd tooling: persist snapshots/restore and experiment mode.
+Sources under `mkosi.extra/usr/lib/theatre-os/cmd-*.sh`.
 
 | Command | What it does |
 |---|---|
-| `theatre-os update` | Pull next release via sysupdate, snapshot persist, paired GC. Refuses in experiment mode. |
 | `theatre-os experiment` | Enter experiment mode live: swap-snapshot `@os/<v>` and `@persist/<v>`, flip `/` to RW. Reboot to leave. |
 | `theatre-os snapshot [name]` | Snapshot `@persist/<v>` to a checkpoint before risky persist mutations. |
 | `theatre-os snapshot list` | Show manual snapshots. |
@@ -92,16 +157,6 @@ needed), and the kernel still serves the running system from the
 renamed copy. Next boot mounts the fresh subvol. Verified across
 `mount -o remount,rw /` on the RW-flipped current subvol;
 end-to-end test in `tests/cases/03-experiment.sh`.
-
-`update` is a small wrapper around `systemd-sysupdate`: pins the
-target version via `sysupdate check-new --json`, runs the install,
-snapshots `@persist/<r>` → `@persist/<n>` so the new version forks
-from the running persist, GCs orphan persist subvols whose `@os`
-sibling no longer exists. Sysupdate's D-Bus daemon + periodic timer
-+ reboot timer are all masked at build time so the wrapper is the
-only entry point (otherwise anything calling the
-`org.freedesktop.sysupdate1` interface would bypass the experiment
-guard and persist snapshot).
 
 ## Layout
 
@@ -121,8 +176,18 @@ The btrfs partition holds both OS and persist subvolumes:
 ├── @os/2026-05-10-0901                    RO, written by sysupdate
 ├── @persist/2026-05-09-1422
 ├── @persist/2026-05-09-1530
-└── @persist/2026-05-10-0901               RW, one per OS version, CoW-shared
+├── @persist/2026-05-10-0901               RW, one per OS version, CoW-shared
+└── last-booted-version                    plain file: last version booted
 ```
+
+(`@persist/` may also hold sibling subvols from the CLI:
+`<v>-snap-<ts>` checkpoints, `<v>-pre-restore-<ts>` backups,
+`<v>-experiment-<u>` scratch. Those have their own lifecycles and are
+never touched by the orphan GC.)
+
+`last-booted-version` sits at the btrfs root (not inside any subvol)
+so it survives per-version swaps; the initrd reads it to fork a new
+version's persist and rewrites it each boot (see Boot sequence).
 
 One partition (vs two) so free space flows between OS and persist.
 Per-version persist isolation means rollback also rolls back persist
@@ -155,9 +220,11 @@ spec-blessed `BUILD_ID=` field.
 
 - `/var/` — bind-mounted entire from `@persist/<v>/var`. Default
   Linux semantics; services find their state where they expect it.
-  Per-version persist is seeded from the rootfs's `/var` tree at
-  install time so packages don't silently re-initialise on first
-  boot.
+  The install version's persist is seeded from the rootfs's `/var`
+  tree at install time so packages don't silently re-initialise on
+  first boot; each later version forks its persist (`/var` included)
+  from the previous boot's persist, in the initrd, on its first boot
+  (see Boot sequence).
 - `/home/kodi/` — bind-mounted, full Kodi userdata + moonlight
   config. Owned by `kodi:kodi` (UID/GID 420, pinned in `sysusers.d/`
   for stability across rebuilds).
@@ -190,12 +257,15 @@ Two complementary repos:
 
 - **theatre-os (this repo)** — anything reproducible-from-source
   that must survive a wipe-and-rebuild. The image carries
-  hardware-coupled Kodi addons + keymaps (AVR volume, lights toggle,
-  watchlist, etc.) under `mkosi.extra/usr/share/kodi/`. Kodi reads
-  these as system addons; no SQLite registration needed. The `zz_`
-  prefix on the AVR keymap forces alphabetical load order so its
-  volume-key bindings beat Kodi's built-in `keyboard.xml` /
-  `remote.xml`.
+  hardware-coupled Kodi addons + keymaps (lights toggle, watchlist,
+  etc.) under `mkosi.extra/usr/share/kodi/`. Kodi reads these as system
+  addons; no SQLite registration needed. The AVR volume addon + its
+  keymap are `t480`-only, so they live in that profile's overlay
+  (`mkosi.profiles/t480/mkosi.extra/usr/share/kodi/`) rather than the
+  shared tree; the `zz_` prefix on the AVR keymap forces alphabetical
+  load order so its volume-key bindings beat Kodi's built-in
+  `keyboard.xml` / `remote.xml`. (The ZBook uses HDMI-CEC for volume,
+  handled by Kodi's built-in libcec peripheral — no addon or keymap.)
 - **ha-config** — anything per-user / stateful / secret. HAKA + its
   HA token, SkinShortcuts menu config (user-edited via the UI),
   Kodi library + watch state + skin choice + instance UUID. Deployed
@@ -210,16 +280,23 @@ HA recreates the entity with a new ID and breaks ~5 automations.
 
 ## Hardware
 
-Built for one machine at a time. Currently a Lenovo ThinkPad T480
-(see `t480-hardware-quirks.md`: AMT provisioning + hostname-sharing
-DNS quirk, eDP-1 disable for external display, HDMI 1.4 cap forcing
-USB-C DP-alt for 4K60). If adapting to other hardware, expect to
-grow your own hardware-quirks doc: ALSA card naming, display output
-selection, kernel modules to add to the initrd, etc.
+Two boxes, one per mkosi profile (see "Profiles (per-machine
+targets)"). Per-box hardware quirks are isolated in the profile — never
+in shared config — so one box's workaround can't regress the other.
 
-Battery: pinned 40-60% via udev rule for an always-plugged-in
-machine. Rationale in
-`mkosi.extra/usr/lib/udev/rules.d/50-charge-thresholds.rules`.
+The `t480` (main theatre) is a Lenovo ThinkPad T480 — see
+`t480-hardware-quirks.md`: AMT provisioning + hostname-sharing DNS
+quirk, eDP-1 disable for external display, HDMI 1.4 cap forcing USB-C
+DP-alt for 4K60. The `zbook` (bedroom TV) is an HP ZBook whose quirks
+are still being characterised — see `zbook-hardware-quirks.md`. When
+adapting to other hardware, expect to grow that doc: ALSA card naming,
+display output selection, kernel modules to add to the initrd, etc.
+
+Battery: the `t480` profile pins charge to 40-60% via a udev rule for
+an always-plugged-in machine. Rationale in
+`mkosi.profiles/t480/mkosi.extra/usr/lib/udev/rules.d/50-charge-thresholds.rules`.
+The ZBook may need its own rule (HP EC exposes charge control
+differently, if at all).
 
 ## Kodi & moonlight
 
@@ -292,6 +369,10 @@ physical power button.
 
 ### AVR event logger
 
+**`t480` profile only** — the bedroom ZBook has no Denon AVR (volume
+runs over HDMI-CEC there), so this ships only in the `t480` image
+(`mkosi.profiles/t480/mkosi.extra/`).
+
 `theatre-os-avr-logger.service` holds a persistent TCP control
 session to the Denon AVR on port 23 and timestamps every
 state-change event the receiver pushes (input switch, surround
@@ -321,37 +402,62 @@ View: `journalctl -u theatre-os-avr-logger -f`. Correlate:
 ## Boot sequence
 
 UEFI → systemd-boot → selected UKI bundles kernel + initrd → the
-initrd's systemd PID 1 mounts `@os/<v>` RO at `/sysroot`,
-`@persist/<v>` at `/sysroot/system/persist`, binds `/sysroot/var`,
-`/sysroot/home/kodi`, and `/sysroot/etc/machine-id` from persist
-(all before switch-root, because PID 1 in the rootfs reads
-machine-id very early and a rootfs-side bind would attach too late),
-then switch-roots. The rootfs's PID 1 inherits those mounts and
-brings up the explicit `efi.mount` that `systemd-gpt-auto-generator`
-is disabled from auto-mounting (the generator hangs
-`initrd-root-fs.target` waiting for a discoverable root partition
-we don't have; cmdline has `rd.systemd.gpt_auto=0`).
-`kodi-gbm.service` lands the user at Kodi on tty1 via
-`Alias=display-manager.service` pulled by `graphical.target`.
+initrd's systemd PID 1 mounts `@os/<v>` RO at `/sysroot`, mounts the
+btrfs root (subvolid=5) at `/sysroot/system/data` so it can see the
+`@persist/` container + `last-booted-version`, runs the
+persist-snapshot step (below) to ensure `@persist/<v>` exists, mounts
+that `@persist/<v>` at `/sysroot/system/persist`, binds `/sysroot/var`,
+`/sysroot/home/kodi`, and `/sysroot/etc/machine-id` from persist (all
+before switch-root, because PID 1 in the rootfs reads machine-id very
+early and a rootfs-side bind would attach too late), then
+switch-roots. The rootfs's PID 1 inherits those mounts and brings up
+the explicit `efi.mount` that `systemd-gpt-auto-generator` is disabled
+from auto-mounting (the generator hangs `initrd-root-fs.target`
+waiting for a discoverable root partition we don't have; cmdline has
+`rd.systemd.gpt_auto=0`). `kodi-gbm.service` lands the user at Kodi on
+tty1 via `Alias=display-manager.service` pulled by `graphical.target`.
 
-The custom mount units (`sysroot.mount`, `sysroot-system-*.mount`,
-`sysroot-var.mount`, `sysroot-home-kodi.mount`,
-`sysroot-etc-machine\x2did.mount`, plus the machine-id oneshot)
-live in `mkosi.images/initrd/mkosi.extra/`. Version stamping happens
-via `mkosi.images/initrd/mkosi.finalize` substituting `@VERSION@` in
-the staged units against `$IMAGE_VERSION`. Each UKI ships with its
-own version-specific mount units, so booting an older UKI from the
-systemd-boot menu mounts the matching `@os/<v>` / `@persist/<v>`.
+### Persist snapshot in the initrd
+
+Between mounting the btrfs root and mounting `@persist/<v>`,
+`theatre-os-persist-snapshot.service` runs
+`/usr/lib/theatre-os/snapshot.sh` to guarantee `@persist/<v>` exists:
+if it doesn't, fork it from `@persist/<last-booted-version>` (or, on a
+brand-new box, empty), then record the version booted. Full case
+analysis and the crash-safety argument live in `snapshot.sh`; the key
+property is that forking happens *here*, in the next boot's initrd
+after the previous boot cleanly shut down, so persist is always forked
+from a settled state — and sourcing from `last-booted-version` (not
+"newest") makes rollback-then-forward fork from the right line.
+
+The initrd's mount units, this service + `snapshot.sh`, and the
+machine-id oneshot live in `mkosi.images/initrd/mkosi.extra/`.
+`mkosi.finalize` substitutes `@VERSION@` into the `.mount` units
+(failing the build if any placeholder survives); `snapshot.sh` reads
+`IMAGE_VERSION` from os-release at runtime instead. Each UKI ships its
+own version-pinned mounts, so booting an older UKI mounts its matching
+`@os/<v>` / `@persist/<v>`.
 
 ## Build & publish
 
 ```sh
-./build.sh           # build (default verb)
-./build.sh -f vm     # rebuild and boot in qemu
-./build.sh shell     # nspawn into the rootfs without booting
-./publish.sh         # PUT .tar + .efi + SHA256SUMS to dufs
-./vacuum.sh [N]      # trim dufs to last N versions (default 20)
+# Default profile is t480 (the main theatre box):
+./build.sh                     # build t480 (default verb)
+./build.sh -f vm               # rebuild t480 and boot in qemu
+./build.sh shell               # nspawn into the rootfs without booting
+./publish.sh                   # PUT t480's .tar + .efi + SHA256SUMS to dufs
+./vacuum.sh [N]                # trim t480's dufs dir to last N (default 20)
+
+# The bedroom ZBook is the `zbook` profile:
+./build.sh --profile=zbook     # build the bedroom-tv image
+./publish.sh zbook             # PUT to dufs/bedroom-tv
+./vacuum.sh zbook [N]          # trim bedroom-tv's dufs dir
 ```
+
+All profiles share one `mkosi.output/`, and each
+`publish.sh`/`vacuum.sh` targets the matching dufs device path — so
+build+publish one target before building the other (see "Profiles
+(per-machine targets)").
 
 **Always invoke via `build.sh`, never `sudo mkosi` directly** —
 `build.sh` renders `mkosi.repart.in/*.in` templates first (mkosi
@@ -405,9 +511,9 @@ Boot / storage:
 - **Strict A/B partitions** — only 2 rollback slots; N subvols gives
   unlimited rollback bounded by retention.
 - **GRUB + grub-btrfs** — solves dynamic menu regen, which we don't
-  need: snapshots happen only on update and sysupdate drops the UKI
-  in the same transaction. systemd-boot's static UKI enumeration is
-  enough.
+  need: the OS subvol (`@os/<v>`) is created only on update and
+  sysupdate drops its UKI in the same transaction. systemd-boot's
+  static UKI enumeration is enough.
 - **erofs files on ext4** (KDE Linux model) — equivalent isolation
   but adds a loop-mount layer; btrfs RO snapshots give the same
   immutability natively. We also don't need delta downloads, so the

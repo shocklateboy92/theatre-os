@@ -9,12 +9,18 @@
 # across rebuilds and reinstalls because it's hardcoded in the repart
 # config, not auto-generated.
 #
-# Mounted RW because sysupdate (Type=subvolume) and the
-# theatre-os update wrapper (btrfs subvolume snapshot @persist/<r>
-# @persist/<n>) both need to create subvolumes at the partition
-# root. The individual @os/<v> subvolumes are independently RO
-# (set by the Subvolumes= flag in repart's config and by sysupdate's
-# ReadOnly=yes), and the @persist subvolumes are RW by design.
+# Mounted RW because several things create/rename/delete subvolumes at
+# the partition root via this view:
+#   - theatre-os-persist-snapshot.service (this initrd) forks/creates
+#     @persist/<v> here before sysroot-system-persist.mount attaches it,
+#     and writes the last-booted-version marker;
+#   - sysupdate (Type=subvolume) drops new @os/<v> here on update;
+#   - the theatre-os CLI's experiment/restore rename trick and the
+#     orphan-@persist GC operate here too (post-switch-root, as
+#     /system/data).
+# The individual @os/<v> subvolumes are independently RO (set by the
+# Subvolumes= flag in repart's config and by sysupdate's ReadOnly=yes),
+# and the @persist subvolumes are RW by design.
 
 [Unit]
 Description=theatre-os data partition (initrd-side)

@@ -16,7 +16,7 @@
 #
 # The directory at @persist/<v>/home/kodi is pre-created at install
 # time by repart's MakeDirectories= (see
-# mkosi.repart.in/10-data.conf.in).
+# mkosi.repart/10-data.conf).
 #
 # Source path is /sysroot/system/persist/home/kodi because in the
 # initrd context, the persist subvol is mounted at

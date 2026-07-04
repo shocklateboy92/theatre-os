@@ -4,12 +4,13 @@
 # this directory (sysroot-var.mount, sysroot-etc-machine\x2did.mount,
 # etc.) all source from here.
 #
-# @VERSION@ is substituted at build time by
-# mkosi.images/initrd/mkosi.finalize.
+# subvol=/@persist/%A: %A is systemd's IMAGE_VERSION specifier,
+# expanded at unit-parse time from this initrd's own os-release. No
+# build-time templating needed.
 #
 # Requires/After=theatre-os-persist-snapshot.service: that oneshot
 # (ordered After=sysroot-system-data.mount) reads
-# /system/data/last-booted-version and ensures @persist/@VERSION@
+# /system/data/last-booted-version and ensures @persist/<IMAGE_VERSION>
 # exists — snapshotted from @persist/<last-booted> on the first boot
 # of a new version, created empty as a last resort, or already present
 # (the common case). Without it having run first, this mount would
@@ -17,7 +18,7 @@
 # yet) and drop the box to emergency.
 
 [Unit]
-Description=theatre-os persist (@persist/@VERSION@) (initrd-side)
+Description=theatre-os persist (@persist/%A) (initrd-side)
 DefaultDependencies=no
 Requires=sysroot-system-data.mount theatre-os-persist-snapshot.service
 After=sysroot-system-data.mount theatre-os-persist-snapshot.service
@@ -27,7 +28,7 @@ Before=initrd-fs.target
 What=/dev/disk/by-partuuid/78332b2c-d061-488f-8f21-41f3fa97226a
 Where=/sysroot/system/persist
 Type=btrfs
-Options=rw,subvol=/@persist/@VERSION@
+Options=rw,subvol=/@persist/%A
 
 [Install]
 RequiredBy=initrd-fs.target

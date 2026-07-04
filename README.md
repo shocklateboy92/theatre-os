@@ -202,7 +202,7 @@ balloons to ~440 MB.
 
 The data partition has a pinned PARTUUID
 (`78332b2c-d061-488f-8f21-41f3fa97226a` in
-`mkosi.repart.in/10-data.conf.in`). The initrd looks it up via
+`mkosi.repart/10-data.conf`). The initrd looks it up via
 `/dev/disk/by-partuuid/` and mounts the right `@os/<v>` and
 `@persist/<v>` based on the `IMAGE_VERSION` baked into the UKI's
 `/usr/lib/os-release`. Same image works on any host whose data
@@ -431,11 +431,14 @@ from a settled state — and sourcing from `last-booted-version` (not
 "newest") makes rollback-then-forward fork from the right line.
 
 The initrd's mount units, this service + `snapshot.sh`, and the
-machine-id oneshot live in `mkosi.images/initrd/mkosi.extra/`.
-`mkosi.finalize` substitutes `@VERSION@` into the `.mount` units
-(failing the build if any placeholder survives); `snapshot.sh` reads
-`IMAGE_VERSION` from os-release at runtime instead. Each UKI ships its
-own version-pinned mounts, so booting an older UKI mounts its matching
+machine-id oneshot live in `mkosi.images/initrd/mkosi.extra/`. The
+version-pinned `.mount` units (`sysroot.mount`,
+`sysroot-system-persist.mount`) carry `subvol=/@os/%A` /
+`subvol=/@persist/%A`; `%A` is systemd's IMAGE_VERSION specifier,
+expanded from the initrd's own os-release when systemd parses the
+unit at boot — no build-time templating. `snapshot.sh` reads the same
+`IMAGE_VERSION` from os-release at runtime. Each UKI ships its own
+version-pinned mounts, so booting an older UKI mounts its matching
 `@os/<v>` / `@persist/<v>`.
 
 ## Build & publish
@@ -460,9 +463,11 @@ build+publish one target before building the other (see "Profiles
 (per-machine targets)").
 
 **Always invoke via `build.sh`, never `sudo mkosi` directly** —
-`build.sh` renders `mkosi.repart.in/*.in` templates first (mkosi
-doesn't preprocess repart configs, so a direct `mkosi` call uses
-stale ones). Output to gitignored `mkosi.repart/`.
+`build.sh` discovers the git SHA (→ `BUILD_ID` in os-release) and
+fetches the pinned HAKA addon before invoking mkosi; a bare `mkosi`
+skips both. (The repart configs no longer need preprocessing —
+per-version subvolume paths use systemd-repart's `%A` specifier
+natively, see `mkosi.repart/10-data.conf`.)
 
 mkosi does almost everything else: `Format=disk` + `SplitArtifacts=
 uki,tar` + `Checksum=yes` produces the `.raw`, `.tar`, `.efi`, and

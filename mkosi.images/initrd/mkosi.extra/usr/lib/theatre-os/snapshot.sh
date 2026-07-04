@@ -10,8 +10,9 @@
 # IMAGE_VERSION is read from THIS initrd's /usr/lib/os-release.
 # mkosi.images/initrd/mkosi.postinst stamps it in at build time
 # (inherits from the top-level mkosi.version), so the value always
-# matches the @os/<v> this UKI is paired with — the same value
-# mkosi.finalize substitutes into the .mount units' subvol= paths.
+# matches the @os/<v> this UKI is paired with — the same value the
+# .mount units resolve via systemd's %A specifier for their subvol=
+# paths.
 #
 # Why the snapshot happens in the initrd, at boot:
 #
@@ -29,7 +30,7 @@
 #       boot of v1. Also the path the freshly-`dd`-installed box takes
 #       on its very first boot, because repart already created (and
 #       seeded) @persist/<install-version> at install time — see
-#       mkosi.repart.in/10-data.conf.in.
+#       mkosi.repart/10-data.conf.
 #
 #   case 2: @persist/<IMAGE_VERSION> doesn't exist, but
 #           @persist/<last-booted> does
@@ -66,9 +67,8 @@ log() { printf 'theatre-os-persist: %s\n' "$*"; }
 die() { printf 'theatre-os-persist: FATAL: %s\n' "$*" >&2; exit 1; }
 
 # Read IMAGE_VERSION from THIS initrd's /usr/lib/os-release. mkosi
-# stamps it at build time (mkosi.postinst); mkosi.finalize substitutes
-# @VERSION@ in the .mount units to the same value so everything stays
-# in sync.
+# stamps it at build time (mkosi.postinst); the .mount units read the
+# same value via systemd's %A specifier, so everything stays in sync.
 # shellcheck disable=SC1091
 . /usr/lib/os-release
 IMAGE_VERSION=${IMAGE_VERSION:-}

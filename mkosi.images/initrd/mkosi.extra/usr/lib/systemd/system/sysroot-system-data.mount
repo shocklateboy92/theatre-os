@@ -3,7 +3,7 @@
 # that after systemd's switch-root the kernel mount survives at
 # /system/data on the running rootfs.
 #
-# Found by pinned PARTUUID (set in mkosi.repart.in/10-data.conf.in
+# Found by pinned PARTUUID (set in mkosi.repart/10-data.conf
 # at install time and re-asserted by the runtime-grow config in
 # mkosi.extra/usr/lib/repart.d/10-data.conf). The PARTUUID is stable
 # across rebuilds and reinstalls because it's hardcoded in the repart

@@ -6,7 +6,7 @@
 # sysupdate would locate the ESP itself, in practice it just looks for
 # a mounted FAT volume at the conventional paths and bails otherwise.
 #
-# We use LABEL=ESP (set in mkosi.repart.in/00-esp.conf via repart's
+# We use LABEL=ESP (set in mkosi.repart/00-esp.conf via repart's
 # default ESP creation) rather than the partition UUID so the same image
 # works on any host with an ESP labelled `ESP`.
 

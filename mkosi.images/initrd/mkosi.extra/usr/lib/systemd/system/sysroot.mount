@@ -2,16 +2,17 @@
 # the initrd treats /sysroot specially — it's the path it pivots into
 # during switch-root.
 #
-# @VERSION@ is substituted at build time by
-# mkosi.images/initrd/mkosi.finalize. The same value is in this
-# image's /usr/lib/os-release VERSION_ID, so the subvolume name
-# baked into this unit always matches the UKI it's shipped in.
+# subvol=/@os/%A: %A is systemd's IMAGE_VERSION specifier, expanded at
+# unit-parse time from this initrd's own /etc/os-release (→
+# /usr/lib/os-release, stamped by mkosi at build time). No build-time
+# templating needed — the subvolume name always matches the UKI this
+# initrd is shipped in, because both derive from the same IMAGE_VERSION.
 #
 # RO because @os/<v> is a RO btrfs subvolume — writes are supposed
 # to fail loudly. See README → Updates & experiment mode.
 
 [Unit]
-Description=theatre-os rootfs (@os/@VERSION@)
+Description=theatre-os rootfs (@os/%A)
 DefaultDependencies=no
 Before=initrd-root-fs.target
 
@@ -19,4 +20,4 @@ Before=initrd-root-fs.target
 What=/dev/disk/by-partuuid/78332b2c-d061-488f-8f21-41f3fa97226a
 Where=/sysroot
 Type=btrfs
-Options=ro,subvol=/@os/@VERSION@
+Options=ro,subvol=/@os/%A

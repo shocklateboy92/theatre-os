@@ -1,7 +1,6 @@
 #!/bin/sh
-# Build entry point. Renders version-stamped templates that mkosi /
-# systemd-repart can't expand on their own (Subvolumes= doesn't accept
-# specifiers — see README.md "Build & publish"), then invokes mkosi.
+# Build entry point. Discovers the git SHA and fetches the pinned HAKA
+# addon, exports both into the build, then invokes mkosi.
 #
 # Any args are passed through to mkosi:
 #   ./build.sh             →  sudo mkosi build
@@ -10,8 +9,13 @@
 #   etc.
 #
 # Lives at repo root (NOT under scripts/) so it's hard to invoke
-# `mkosi` directly by accident — running mkosi without the templating
-# step uses stale repart configs from the last build.
+# `mkosi` directly by accident — a bare `mkosi` misses the git-SHA
+# stamp (THEATREOS_GIT_SHA → BUILD_ID in os-release) and the HAKA
+# fetch below, both of which this wrapper sets up.
+#
+# NB: the repart configs no longer need preprocessing. Per-version
+# subvolume paths use systemd-repart's %A specifier (= IMAGE_VERSION)
+# natively — see mkosi.repart/10-data.conf.
 
 set -eu
 
@@ -92,32 +96,6 @@ else
     THEATREOS_GIT_SHA=unknown
 fi
 export THEATREOS_GIT_SHA
-
-# Render *.in templates from mkosi.repart.in/ into mkosi.repart/,
-# substituting @VERSION@. Static .conf files in the same template dir
-# are copied verbatim. Output dir is gitignored.
-tmpl_dir=mkosi.repart.in
-out_dir=mkosi.repart
-
-mkdir -p "$out_dir"
-# Wipe to avoid stale outputs from previous builds (e.g. if a template
-# was renamed or removed since last build). Use find instead of glob
-# expansion to handle empty dirs cleanly.
-find "$out_dir" -maxdepth 1 -name '*.conf' -type f -delete
-
-for src in "$tmpl_dir"/*; do
-        [ -f "$src" ] || continue
-        base="$(basename "$src")"
-        case "$base" in
-                *.conf.in)
-                        out="$out_dir/${base%.in}"
-                        sed "s|@VERSION@|$VERSION|g" "$src" > "$out"
-                        ;;
-                *.conf)
-                        cp "$src" "$out_dir/$base"
-                        ;;
-        esac
-done
 
 # Fetch HAKA (custom fork of script.program.homeassistant) into the
 # rootfs tree. Pinned to a commit SHA so a build is reproducible to

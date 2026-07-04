@@ -37,8 +37,6 @@ RestrictAddressFamilies=AF_UNIX
 RestrictNamespaces=yes
 LockPersonality=yes
 SystemCallArchitectures=native
-# A slow/odd btrfs op shouldn't wedge the unit forever.
-TimeoutStartSec=120
 
 [Install]
 WantedBy=multi-user.target

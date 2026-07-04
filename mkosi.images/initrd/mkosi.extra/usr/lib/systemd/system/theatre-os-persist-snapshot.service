@@ -14,11 +14,6 @@
 # than inlined here. The script reads IMAGE_VERSION from this initrd's
 # /usr/lib/os-release (the version of THIS initrd, baked at build time
 # by mkosi.images/initrd/mkosi.postinst), not the sysroot rootfs's.
-#
-# A static service, NOT a systemd generator: the work it does is normal
-# runtime filesystem mutation (creating/snapshotting subvols), which
-# generators aren't allowed to do — systemd.generator(7) limits
-# generators to emitting unit files.
 
 [Unit]
 Description=Snapshot or create theatre-os @persist/<IMAGE_VERSION>

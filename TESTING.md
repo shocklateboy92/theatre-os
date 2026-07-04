@@ -81,13 +81,6 @@ updates.
 
 ### Not yet covered
 
-- **Updating** — now plain `updatectl update host` (no
-  `theatre-os update` verb), so there's no theatre-os shell code left
-  to unit-test here; the boot-time persist fork and orphan GC are what
-  carry the OS-specific logic now (next bullet). The manual end-to-end
-  update loop documented in commit 19bb1ca (phase 4) still applies;
-  exercising it in the harness would need a second build to update
-  *to* + a second publish to dufs, ~doubling runtime to ~15min/run.
 - **Boot-time persist snapshot + orphan GC** — the initrd's
   `snapshot.sh` (fork `@persist/<v>` from `last-booted-version` on
   first boot of a new version) and `theatre-os-persist-gc.service`

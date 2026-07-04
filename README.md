@@ -70,10 +70,11 @@ genuinely per-box bits are split into `mkosi.profiles/<profile>/`
 
 - **Hostname** — baked, so per profile. The base `mkosi.conf` keeps a
   `theatre-os` fallback only for a stray profile-less build.
-- **Update source path** — baked into the image's
-  `usr/lib/sysupdate.d/*.transfer`, so a box only ever pulls its own
-  updates. This path *must* match the dufs subdir `publish.sh` pushes
-  to, hence the per-profile copies of the transfer files.
+- **Update source path** — the shared `usr/lib/sysupdate.d/*.transfer`
+  pull from `.../sysupdate/%H/`, where systemd-sysupdate expands `%H` to
+  the box's hostname — so each box only pulls its own updates, and the
+  path automatically matches the dufs subdir `publish.sh` pushes to. No
+  per-profile transfer files needed.
 - **Output directory** — all profiles share one `mkosi.output/`.
   Output is deliberately *not* split per profile: the top-level
   `Initrds=%O/initrd` expands `%O` against the default output dir when
@@ -88,22 +89,16 @@ genuinely per-box bits are split into `mkosi.profiles/<profile>/`
   them and drives volume over HDMI-CEC instead (`kodi` already depends
   on `libcec`, so the Pulse-Eight USB-CEC adapter works with no extra
   packages).
-- **Hardware quirks** — both profiles blank the internal laptop panel
-  with `video=eDP-1:d` (Kodi is gbm-direct/single-CRTC, so a live
-  internal panel means nothing reaches the TV). The T480's 40–60%
-  battery charge-threshold udev rule is `t480`-only; the ZBook's
-  battery/ALSA/initrd equivalents are TBD (see
+- **Hardware quirks** — the base cmdline blanks the internal laptop
+  panel with `video=eDP-1:d` (Kodi is gbm-direct/single-CRTC, so a live
+  internal panel means nothing reaches the TV) — both boxes need it. The
+  T480's 40–60% battery charge-threshold udev rule is `t480`-only; the
+  ZBook's battery/ALSA/initrd equivalents are TBD (see
   `zbook-hardware-quirks.md`).
 
 Profiles are selected with `--profile`, which `build.sh` passes
 through; a bare `./build.sh` defaults to `t480` and behaves exactly as
 it did before profiles existed. See "Build & publish".
-
-To add a **third** box: create `mkosi.profiles/<name>/mkosi.conf`
-(hostname + `OutputDirectory=%D/mkosi.output/<name>`), add its two
-`*.transfer` files under that profile's `mkosi.extra`, add the
-profile → dufs-device mapping to `publish.sh` and `vacuum.sh`, and
-write the profile's hardware-quirks doc.
 
 ## Iteration loop
 

@@ -40,13 +40,10 @@ if [ "$have_profile" -eq 0 ]; then
 fi
 echo "build.sh: profile=$PROFILE"
 
-# All profiles share one output dir. Do NOT move this per-profile via
-# OutputDirectory= in a profile: the top-level `Initrds=%O/initrd` in
-# mkosi.conf expands %O against the DEFAULT output dir at parse time
-# (before a profile override applies), so a per-profile OutputDirectory
-# makes the UKI embed a stale initrd from mkosi.output/ and the image
-# fails to mount its rootfs at boot. Build one target at a time and
-# publish it before building the other.
+# Where mkosi writes artefacts. This is mkosi's own default when
+# mkosi.output/ exists; we set it explicitly only so the artefact prune
+# below can find them. All profiles deliberately share this one dir —
+# see README → Profiles for why output must NOT be split per profile.
 OUTDIR="mkosi.output"
 
 VERSION="$(./mkosi.version)"

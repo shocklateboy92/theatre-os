@@ -1,12 +1,12 @@
-# theatre-os rootfs transfer for systemd-sysupdate. (t480 profile)
-#
-# Per-profile copy: the ONLY per-box difference from the zbook profile's
-# copy is the Path= segment (theatre-t480 vs bedroom-tv), which must
-# match the dufs subdir publish.sh/vacuum.sh push this profile to. Keep
-# the rest of this file in sync with the zbook copy.
+# theatre-os rootfs transfer for systemd-sysupdate.
 #
 # Pulls theatre-os_<v>.tar from the homelab dufs instance and extracts it
 # into a fresh RO btrfs subvolume at /system/data/@os/<v>.
+#
+# Shared across profiles: the per-box dufs subdir is the hostname
+# (theatre-t480 / bedroom-tv), so the Source Path uses the %H specifier
+# (systemd-sysupdate expands it to the running hostname). publish.sh /
+# vacuum.sh push each profile to its matching sysupdate/<hostname>/ dir.
 #
 # Paired with 20-uki.transfer: same @v, sysupdate treats them as one update
 # transaction. See README → Architecture → Distribution and
@@ -22,7 +22,7 @@ Verify=no
 
 [Source]
 Type=url-tar
-Path=https://static.apps.lasath.com/sysupdate/theatre-t480/
+Path=https://static.apps.lasath.com/sysupdate/%H/
 MatchPattern=theatre-os_@v.tar
 
 [Target]
